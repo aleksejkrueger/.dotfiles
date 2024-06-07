@@ -1,0 +1,12 @@
+#!/bin/bash
+
+if [ -x /usr/local/bin/gpg-connect-agent ]; then
+    exec /usr/local/bin/gpg-connect-agent "$@"
+elif [ -x /usr/bin/gpg-connect-agent ]; then
+    exec /usr/bin/gpg-connect-agent "$@"
+elif [ -x /opt/homebrew/bin/gpg-connect-agent ]; then
+    exec /opt/homebrew/bin/gpg-connect-agent "$@"
+else
+    echo "gpg-connect-agent not found" >&2
+    exit 1
+fi

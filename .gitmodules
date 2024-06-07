@@ -1,0 +1,174 @@
+# zsh
+[submodule "ohmyzsh"]
+	path = HOME/.zsh/ohmyzsh
+	url = https://github.com/ohmyzsh/ohmyzsh.git
+[submodule "powerlevel10k"]
+	path = HOME/.zsh/powerlevel10k
+	url = https://github.com/romkatv/powerlevel10k.git
+[submodule "zsh-autopair"]
+	path = HOME/.zsh/zsh-autopair
+	url = https://github.com/hlissner/zsh-autopair.git
+[submodule "zsh-autosuggestions"]
+	path = HOME/.zsh/zsh-autosuggestions
+	url = https://github.com/zsh-users/zsh-autosuggestions.git
+[submodule "zsh-completions"]
+	path = HOME/.zsh/zsh-completions
+	url = https://github.com/zsh-users/zsh-completions.git
+[submodule "zsh-syntax-highlighting"]
+	path = HOME/.zsh/zsh-syntax-highlighting
+	url = https://github.com/zsh-users/zsh-syntax-highlighting.git
+[submodule "fzf"]
+	path = HOME/.zsh/fzf
+	url = https://github.com/junegunn/fzf.git
+[submodule "dracula-zsh-syntax-highlighting"]
+	path = HOME/.zsh/dracula-zsh-syntax-highlighting
+	url = https://github.com/dracula/zsh-syntax-highlighting.git
+
+# tmux
+[submodule "tmux-battery"]
+	path = HOME/.tmux/plugins/tmux-battery
+	url = https://github.com/tmux-plugins/tmux-battery.git
+[submodule "tmux-copycat"]
+	path = HOME/.tmux/plugins/tmux-copycat
+	url = https://github.com/tmux-plugins/tmux-copycat.git
+[submodule "tmux-cpu"]
+	path = HOME/.tmux/plugins/tmux-cpu
+	url = https://github.com/tmux-plugins/tmux-cpu.git
+[submodule "tmux-df"]
+	path = HOME/.tmux/plugins/tmux-df
+	url = https://github.com/tassaron/tmux-df.git
+[submodule "tmux-jump"]
+	path = HOME/.tmux/plugins/tmux-jump
+	url = https://github.com/schasse/tmux-jump.git
+[submodule "tmux-keyboard-layout"]
+	path = HOME/.tmux/plugins/tmux-keyboard-layout
+	url = https://github.com/imomaliev/tmux-keyboard-layout.git
+[submodule "tmux-maildir-counter"]
+	path = HOME/.tmux/plugins/tmux-maildir-counter
+	url = https://github.com/tmux-plugins/tmux-maildir-counter.git
+[submodule "tmux-menus"]
+	path = HOME/.tmux/plugins/tmux-menus
+	url = https://github.com/jaclu/tmux-menus.git
+[submodule "tmux-online-status"]
+	path = HOME/.tmux/plugins/tmux-online-status
+	url = https://github.com/tmux-plugins/tmux-online-status.git
+[submodule "tmux-prefix-highlight"]
+	path = HOME/.tmux/plugins/tmux-prefix-highlight
+	url = https://github.com/tmux-plugins/tmux-prefix-highlight.git
+[submodule "tmux-sensible"]
+	path = HOME/.tmux/plugins/tmux-sensible
+	url = https://github.com/tmux-plugins/tmux-sensible.git
+[submodule "tmux-sidebar"]
+	path = HOME/.tmux/plugins/tmux-sidebar
+	url = https://github.com/tmux-plugins/tmux-sidebar.git
+[submodule "tmux-spotify-tui"]
+	path = HOME/.tmux/plugins/tmux-spotify-tui
+	url = https://github.com/alexchaichan/tmux-spotify-tui.git
+[submodule "tmux-uptime"]
+	path = HOME/.tmux/plugins/tmux-uptime
+	url = https://github.com/robhurring/tmux-uptime.git
+[submodule "tmux-urlview"]
+	path = HOME/.tmux/plugins/tmux-urlview
+	url = https://github.com/tmux-plugins/tmux-urlview.git
+[submodule "tmux-weather"]
+	path = HOME/.tmux/plugins/tmux-weather
+	url = https://github.com/xamut/tmux-weather.git
+[submodule "tmux-yank"]
+	path = HOME/.tmux/plugins/tmux-yank
+	url = https://github.com/tmux-plugins/tmux-yank.git
+
+# vim
+[submodule "bufferline.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/bufferline.nvim
+	url = https://github.com/akinsho/bufferline.nvim.git
+[submodule "cmp-buffer"]
+	path = HOME/.config/nvim/pack/plugins/start/cmp-buffer
+	url = https://github.com/hrsh7th/cmp-buffer.git
+[submodule "cmp-cmdline"]
+	path = HOME/.config/nvim/pack/plugins/start/cmp-cmdline
+	url = https://github.com/hrsh7th/cmp-cmdline.git
+[submodule "cmp-path"]
+	path = HOME/.config/nvim/pack/plugins/start/cmp-path
+	url = https://github.com/hrsh7th/cmp-path.git
+[submodule "Comment.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/Comment.nvim
+	url = https://github.com/numToStr/Comment.nvim.git
+[submodule "FixCursorHold.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/FixCursorHold.nvim
+	url = https://github.com/antoinemadec/FixCursorHold.nvim.git
+[submodule "gitsigns.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/gitsigns.nvim
+	url = https://github.com/lewis6991/gitsigns.nvim.git
+[submodule "harpoon"]
+	path = HOME/.config/nvim/pack/plugins/start/harpoon
+	url = https://github.com/ThePrimeagen/harpoon.git
+[submodule "impatient.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/impatient.nvim
+	url = https://github.com/lewis6991/impatient.nvim.git
+[submodule "indent-blankline.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/indent-blankline.nvim
+	url = https://github.com/lukas-reineke/indent-blankline.nvim.git
+[submodule "lualine.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/lualine.nvim
+	url = https://github.com/nvim-lualine/lualine.nvim.git
+[submodule "nvim-autopairs"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-autopairs
+	url = https://github.com/windwp/nvim-autopairs.git
+[submodule "nvim-tree.lua"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-tree.lua
+	url = https://github.com/kyazdani42/nvim-tree.lua.git
+[submodule "nvim-web-devicons"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-web-devicons
+	url = https://github.com/kyazdani42/nvim-web-devicons.git
+[submodule "nvim-yarp"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-yarp
+	url = https://github.com/roxma/nvim-yarp.git
+[submodule "plenary.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/plenary.nvim
+	url = https://github.com/nvim-lua/plenary.nvim.git
+[submodule "popup.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/popup.nvim
+	url = https://github.com/nvim-lua/popup.nvim.git
+[submodule "rnvimr"]
+	path = HOME/.config/nvim/pack/plugins/start/rnvimr
+	url = https://github.com/kevinhwang91/rnvimr.git
+[submodule "telescope.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/telescope.nvim
+	url = https://github.com/nvim-telescope/telescope.nvim.git
+[submodule "vim-dracula"]
+	path = HOME/.config/nvim/pack/plugins/start/vim
+	url = https://github.com/dracula/vim.git
+[submodule "vim-bbye"]
+	path = HOME/.config/nvim/pack/plugins/start/vim-bbye
+	url = https://github.com/moll/vim-bbye.git
+[submodule "vim-easymotion"]
+	path = HOME/.config/nvim/pack/plugins/start/vim-easymotion
+	url = https://github.com/easymotion/vim-easymotion.git
+[submodule "nvim-ts-context-commentstring"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-ts-context-commentstring
+	url = https://github.com/JoosepAlviste/nvim-ts-context-commentstring.git
+[submodule "nvim-cmp"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-cmp
+  	url = https://github.com/hrsh7th/nvim-cmp.git
+[submodule "lsp-inlayhints.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/lsp-inlayhints.nvim
+  	url = https://github.com/lvimuser/lsp-inlayhints.nvim.git
+[submodule "jupytext.vim"]
+	path = HOME/.config/nvim/pack/plugins/start/jupytext.vim
+  	url = https://github.com/goerz/jupytext.vim.git
+[submodule "vim-slime"]
+	path = HOME/.config/nvim/pack/plugins/start/vim-slime
+  	url = https://github.com/jpalardy/vim-slime.git
+[submodule "nvim-ipy"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-ipy
+  	url = https://github.com/bfredl/nvim-ipy.git
+
+[submodule "dracula-alacritty"]
+	path = alacritty/alacritty
+	url = https://github.com/dracula/alacritty.git
+[submodule "dracula-qutebrowser"]
+	path = HOME/.config/qutebrowser/qutebrowser-dracula-theme
+	url = https://github.com/dracula/qutebrowser-dracula-theme.git
+[submodule "bookmarks"]
+	path = HOME/.config/qutebrowser/bookmarks
+	url = https://github.com/alexchaichan/bookmarks.git

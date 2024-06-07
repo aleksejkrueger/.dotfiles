@@ -1,0 +1,14 @@
+#!/bin/bash
+
+if [ -x /usr/local/bin/spt ]; then
+    exec /usr/local/bin/spt "$@"
+elif [ -x /usr/bin/spt ]; then
+    exec /usr/bin/spt "$@"
+elif [ -x /opt/homebrew/bin/spt ]; then
+    exec /opt/homebrew/bin/spt "$@"
+elif [ -x $HOME/.cargo/bin/spt ]; then
+    exec $HOME/.cargo/bin/spt "$@"
+else
+    echo "spt not found" >&2
+    exit 1
+fi

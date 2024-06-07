@@ -1,0 +1,3 @@
+[shell]
+args = ["--login", "-c", "tmux attach || tmux ; pkill spotifyd ; pkill spt ; gpg-connect-agent reloadagent /bye"]
+program = "/usr/bin/zsh"

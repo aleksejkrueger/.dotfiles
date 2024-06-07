@@ -1,0 +1,35 @@
+import = ["~/.alacritty/keybindings.toml", "~/.alacritty/shell.toml", "~/.alacritty/window.toml", "~/.alacritty/alacritty/dracula.toml"]
+
+[font]
+size = 14
+
+[font.bold]
+family = "Monaco Nerd Font"
+
+[font.bold_italic]
+family = "Monaco Nerd Font"
+
+[font.italic]
+family = "Monaco Nerd Font"
+
+[font.normal]
+family = "Monaco Nerd Font"
+
+[cursor]
+blink_interval = 750
+thickness = 0.2
+unfocused_hollow = true
+
+[cursor.style]
+blinking = "Always"
+shape = "Beam"
+
+[env]
+TERM = "alacritty"
+
+[scrolling]
+multiplier = 0
+
+[window.dimensions]
+columns = 256
+lines = 65

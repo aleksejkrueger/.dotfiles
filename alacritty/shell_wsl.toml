@@ -1,0 +1,3 @@
+[shell]
+args = ["tmux attach || tmux || zsh", "gpg-connect-agent reloadagent /bye"]
+program = "wsl"

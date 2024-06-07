@@ -1,0 +1,161 @@
+.PHONY: help
+help:
+	@echo "Available targets:"
+	@echo "  help         - Display this help message."
+	@echo "  test         - Display detected OS, current directory, and username."
+	@echo "  setup        - Run the setup process which includes test, scripts, symlinks, alacritty, and os."
+	@echo "  os           - Perform OS-specific setup tasks (macOS, Linux, or WSL)."
+	@echo "  scripts      - Make all scripts in the 'scripts' directory executable and symlink them to '/usr/local/bin/'."
+	@echo "  symlinks     - Create necessary symlinks by running the 'scripts/symlinks' script."
+	@echo "  alacritty    - Setup Alacritty configuration based on the detected OS."
+	@echo "  subl         - Initialize Sublime Text configuration."
+	@echo "  rust         - Install Rust using rustup."
+	@echo "  asdf         - Clone the asdf version manager repository."
+	@echo "  python       - Install pyenv and set the global Python version to 3.11.6."
+	@echo "  repos        - Clone various Git repositories for data science, cheatsheets, templates, and Pandoc filters."
+	@echo "  passwords    - Retrieve and set up credentials using pass."
+
+# Detect the operating system
+ifeq ($(OS),Windows_NT)
+    OS := windows
+else
+    OS := $(shell scripts/detect_os)
+endif
+
+CUR_DIR := $(shell pwd)
+USERNMAE := $(shell whoami)
+
+.PHONY: test
+test:
+	@echo 'OS = $(OS)'
+	@echo 'CUR_DIR = $(CUR_DIR)'
+	@echo 'USERNMAE = $(USERNMAE)'
+
+.PHONY: setup
+setup: test scripts symlinks os
+	@echo "fnished"
+
+.PHONY: scripts
+scripts:
+	chmod +x $(CUR_DIR)/scripts/*; \
+	sudo ln -sf $(CUR_DIR)/scripts/* /usr/local/bin/;
+
+.PHONY: symlinks
+symlinks: alacritty subl
+	$(shell scripts/symlinks)
+
+.PHONY: alacritty
+alacritty:
+	@if [ "$(OS)" = "osx" ]; then \
+		ln -sf $(HOME)/.dotfiles/alacritty/alacritty.toml $(HOME)/.config; \
+		mkdir -p $(HOME)/.alacritty; \
+		ln -sf $(HOME)/.dotfiles/alacritty/alacritty/ $(HOME)/.alacritty/; \
+		ln -sf $(HOME)/.dotfiles/alacritty/keybindings_osx.toml $(HOME)/.alacritty/keybindings.toml; \
+		ln -sf $(HOME)/.dotfiles/alacritty/shell_osx.toml $(HOME)/.alacritty/shell.toml; \
+		ln -sf $(HOME)/.dotfiles/alacritty/window_osx.toml $(HOME)/.alacritty/window.toml; \
+	elif [ "$(OS)" = "linux" ]; then \
+		echo " "; \
+	elif [ "$(OS)" = "wsl" ]; then \
+		export windows_username=$(basename $(wslpath $(wslvar USERPROFILE))); \
+		cp -f $(HOME)/.dotfiles/alacritty/alacritty.toml /mnt/c/Users/$(windows_username)/AppData/Roaming/alacritty/alacritty.toml; \
+		mkdir -p /mnt/c/Users/$(windows_username)/.alacritty; \
+		cp -f $(HOME)/.dotfiles/alacritty/*wsl*.toml /mnt/c/Users/$(windows_username)/.alacritty; \
+		cp -rf $(HOME)/.dotfiles/alacritty/alacritty/ /mnt/c/Users/$(windows_username)/.alacritty; \
+		for file in /mnt/c/Users/$(windows_username)/.alacritty/*_wsl.toml; do \
+			mv -- "$$file" "$${file%_wsl.toml}.toml"; \
+		done; \
+	fi
+
+.PHONY: subl
+subl:
+	if [ "$(OS)" = "osx" ]; then \
+		echo "init sublime text"; \
+			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/; \
+			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/; \
+			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
+			sudo ln -sf $(CUR_DIR)/HOME/.config/sublime-text/Sublime\ Text/Packages/User/* $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
+			sudo ln -sf $(CUR_DIR)/HOME/.config/sublime-text/Sublime\ Text/Packages/Dracula\ Color\ Scheme $(HOME)/Library/Application\ Support/Sublime\ Text/Packages; \
+			sudo rm -f $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/Preferences.sublime-settings; \
+			sudo cp -f $(CUR_DIR)/HOME/.config/sublime-text/Sublime\ Text/Packages/User/Preferences.sublime-settings $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
+	fi
+
+.PHONY: os
+os:
+	@read -p "Choose an option (work/private): " OPTION; \
+	DEVICE=$$OPTION; \
+	export DEVICE; \
+	if [ "$(OS)" = "osx" ]; then \
+		echo "$(OS) detected"; \
+		echo "run .macos"; \
+		sudo -v; \
+		while true; do sudo -n true; sleep 60; kill -0 $$ || exit; done 2>/dev/null & \
+		bash -c "source $(CUR_DIR)/OS/osx/.macos"; \
+		echo "install Brewfile"; \
+		brew bundle --file=$(CUR_DIR)/OS/osx/Brewfile_$${DEVICE}; \
+		echo "source duti-file"; \
+		bash -c "source $(CUR_DIR)/OS/osx/duti.sh"; \
+		mkdir -p $(HOME)/.qutebrowser; \
+		ln -sf $(HOME)/.dotfiles/HOME/.config/qutebrowser/* $(HOME)/.qutebrowser/; \
+	elif [ "$(OS)" = "linux" ]; then \
+		echo "$(OS) detected"; \
+	elif [ "$(OS)" = "wsl" ]; then \
+		echo "$(OS) detected"; \
+		echo "install packages"; \
+		sudo apt install -y zsh procps curl file git tmux ranger; \
+		echo "install linuxbrew"; \
+		/bin/bash -c "$(curl --no-keepalive -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"; \
+	fi
+	@if [ -z "`${SHELL} -c 'echo ${ZSH_VERSION}'`" ]; then \
+	  sudo sh -c "echo $(which zsh) >> /etc/shells" \
+	  chsh -s "$(which zsh)"; \
+	fi
+
+.PHONY: rust
+rust:
+	@echo "rust-up"; \
+	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+.PHONY: asdf
+asdf:
+	git clone https://github.com/asdf-vm/asdf.git $(HOME)/.asdf --branch v0.14.0;
+
+PYVERSION := 3.11.6
+
+.PHONY: python
+python:
+	@if [ "$(OS)" = "osx" ]; then \
+		command -v pyenv >/dev/null  || { \
+			echo "pyenv is not installed. Installing pyenv via Homebrew..."; \
+			brew install pyenv; \
+		}; \
+	elif [ "$(OS)" = "linux" ]; then \
+		echo "nothing so far"; \
+	elif [ "$(OS)" = "wsl" ]; then \
+		command -v pyenv >/dev/null 2>&1 || { \
+			echo "pyenv is not installed. Installing pyenv via apt..."; \
+			curl https://pyenv.run | bash; \
+		}; \
+	fi
+	@if test -f $(HOME)/.pyenv/version; then \
+		echo " 󱔎 "; \
+	else \
+		pyenv global $(PYVERSION); \
+	fi
+	@if test -f $(CUR_DIR).venv; then \
+		python -m venv .venv; \
+	else \
+		echo " 󱔎 "; \
+	fi
+
+.PHONY: repos
+repos:
+	git clone https://github.com/alexchaichan/data-science.git $(HOME)/data-science; \
+	git clone https://github.com/alexchaichan/cheatsheets.git $(HOME)/cheatsheets; \
+	git clone https://github.com/alexchaichan/Templates.git $(HOME)/Templates; \
+	git clone https://github.com/pandoc/lua-filters.git $(HOME)/.local/share/pandoc/filters;
+
+.PHONY: passwords
+passwords:
+	echo | pass spotify/spotify-tui  > $(HOME)/.config/spotify-tui/client.yml; \
+	echo | pass spotify/spotifyd  > $(HOME)/.cache/spotifyd/credentials.json;
+

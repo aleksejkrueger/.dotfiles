@@ -1,0 +1,8 @@
+pip install: 
+  - jupytext
+  - ipython
+  - tldextract
+  - pip-tool
+  - poetry
+  - wheel
+

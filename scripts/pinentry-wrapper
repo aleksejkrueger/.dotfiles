@@ -1,0 +1,12 @@
+#!/bin/bash
+
+if [ -x /usr/local/bin/pinentry ]; then
+    exec /usr/local/bin/pinentry "$@"
+elif [ -x /usr/bin/pinentry ]; then
+    exec /usr/bin/pinentry "$@"
+elif [ -x /opt/homebrew/bin/pinentry ]; then
+    exec /opt/homebrew/bin/pinentry "$@"
+else
+    echo "pinentry not found" >&2
+    exit 1
+fi
