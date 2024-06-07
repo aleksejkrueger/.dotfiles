@@ -166,8 +166,8 @@
 [submodule "dracula-alacritty"]
 	path = alacritty/alacritty
 	url = https://github.com/dracula/alacritty.git
-[submodule "dracula-qutebrowser"]
-	path = HOME/.config/qutebrowser/qutebrowser-dracula-theme
+[submodule "dracula"]
+	path = HOME/.config/qutebrowser/dracula
 	url = https://github.com/dracula/qutebrowser-dracula-theme.git
 [submodule "bookmarks"]
 	path = HOME/.config/qutebrowser/bookmarks
