@@ -68,7 +68,7 @@ alacritty:
 
 .PHONY: subl
 subl:
-	if [ "$(OS)" = "osx" ]; then \
+	@if [ "$(OS)" = "osx" ]; then \
 		echo "init sublime text"; \
 			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/; \
 			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/; \
@@ -119,7 +119,7 @@ rust:
 asdf:
 	git clone https://github.com/asdf-vm/asdf.git $(HOME)/.asdf --branch v0.14.0;
 
-PYVERSION := 3.11.6
+PYVERSION := "3.11.6"
 
 .PHONY: python
 python:
@@ -136,15 +136,15 @@ python:
 			curl https://pyenv.run | bash; \
 		}; \
 	fi
-	@if test -f $(HOME)/.pyenv/version; then \
+	@if test -f $(CUR_DIR)/.python-version; then \
 		echo " 󱔎 "; \
 	else \
-		pyenv global $(PYVERSION); \
+		pyenv local $(PYVERSION); \
 	fi
-	@if test -f $(CUR_DIR).venv; then \
-		python -m venv .venv; \
-	else \
+	@if test -d $(CUR_DIR)/.venv/; then \
 		echo " 󱔎 "; \
+	else \
+		python -m venv .venv; \
 	fi
 
 .PHONY: repos

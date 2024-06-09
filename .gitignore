@@ -11,6 +11,7 @@ Thumbs.db
 /.sconsign.dblite
 /.pytest_cache/
 /__pycache__/
+.python-version
 /node_modules/
 /npm-debug.log*
 /.npm/
