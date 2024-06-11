@@ -119,12 +119,14 @@ vim.cmd(
 vim.g.nvim_ipy_perform_mappings = true
 
 -- Configure vim-slime to target neovim
--- vim.g.slime_target = "neovim"
+vim.g.slime_target = "neovim"
 
 -- vim-slime configuration
-vim.g.slime_target = "tmux"
+-- vim.g.slime_target = "tmux"
 vim.g.slime_python_ipython = 1
-vim.g.slime_default_config = { socket_name = "default", target_pane = "1" }
+--vim.g.slime_default_config = { socket_name = "default", target_pane = "1" }
+-- vim.g.slime_default_config = {socket_name = "default", target_pane = "1.1"}
+
 
 -- Set jupytext command
 vim.g.jupytext_command = "jupytext"

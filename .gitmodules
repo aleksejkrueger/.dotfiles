@@ -116,7 +116,7 @@
 	url = https://github.com/windwp/nvim-autopairs.git
 [submodule "nvim-tree.lua"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-tree.lua
-	url = https://github.com/kyazdani42/nvim-tree.lua.git
+	url = https://github.com/nvim-tree/nvim-tree.lua.git
 [submodule "nvim-web-devicons"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-web-devicons
 	url = https://github.com/kyazdani42/nvim-web-devicons.git
