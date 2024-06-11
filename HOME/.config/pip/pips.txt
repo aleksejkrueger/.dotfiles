@@ -5,4 +5,8 @@ pip install:
   - pip-tool
   - poetry
   - wheel
+  - spyder
+  - spyder-notebooks
+  - neovim
+  - spyder-kernels
 

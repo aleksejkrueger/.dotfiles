@@ -79,6 +79,7 @@ bindkey "^[[4~" end-of-line
 
 export GOPATH=$HOME/go
 export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin"
+export PATH=:"$PATH:$HOME/Library/Python/3.9/bin"
 export PATH="$PATH:$HOME/.cargo/bin"
 
 export PYENV_ROOT="$HOME/.pyenv"
@@ -109,3 +110,4 @@ if [ -f "$HOME/.work/work.zsh" ]; then
 fi
 
 clear
+GRANTED_ENABLE_AUTO_REASSUME=true

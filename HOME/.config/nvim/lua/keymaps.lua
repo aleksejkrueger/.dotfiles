@@ -131,3 +131,7 @@ keymap("n", "T", ":vimgrep '^\\#' % | cw<cr>", opts)
 -- open actual file with sublime-text
 keymap("n", "<leader>z", ":! subl %<cr><cr>", opts)
 
+-- Key mappings to send code with slime
+keymap('n', '<leader>n', ':SlimeSendCurrentLine <cr><cr><cr>', {})
+keymap('v', '<leader>n', ':SlimeSend <cr><cr><cr>', {})
+
