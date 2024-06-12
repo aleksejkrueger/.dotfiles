@@ -122,6 +122,7 @@ asdf:
 PYVERSION := "3.11.6"
 
 .PHONY: python
+#curl -sSL https://install.python-poetry.org | python3 -
 python:
 	@if [ "$(OS)" = "osx" ]; then \
 		command -v pyenv >/dev/null  || { \
