@@ -135,3 +135,7 @@ keymap("n", "<leader>z", ":! subl %<cr><cr>", opts)
 keymap('n', '<leader>n', ':SlimeSendCurrentLine <cr><cr><cr>', {})
 keymap('v', '<leader>n', ':SlimeSend <cr><cr><cr>', {})
 
+-- dap
+keymap('n', '<leader>db', ':DapToggleBreakpoint <CR>', { noremap = true, silent = true })
+keymap('n', '<leader>dpr', ':lua require("dap-python").test_method()<CR>', { noremap = true, silent = true })
+

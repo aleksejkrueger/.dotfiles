@@ -149,19 +149,59 @@
 	url = https://github.com/JoosepAlviste/nvim-ts-context-commentstring.git
 [submodule "nvim-cmp"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-cmp
-  	url = https://github.com/hrsh7th/nvim-cmp.git
+  url = https://github.com/hrsh7th/nvim-cmp.git
 [submodule "lsp-inlayhints.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/lsp-inlayhints.nvim
-  	url = https://github.com/lvimuser/lsp-inlayhints.nvim.git
+  url = https://github.com/lvimuser/lsp-inlayhints.nvim.git
 [submodule "jupytext.vim"]
 	path = HOME/.config/nvim/pack/plugins/start/jupytext.vim
-  	url = https://github.com/goerz/jupytext.vim.git
+  url = https://github.com/goerz/jupytext.vim.git
 [submodule "vim-slime"]
 	path = HOME/.config/nvim/pack/plugins/start/vim-slime
-  	url = https://github.com/jpalardy/vim-slime.git
+  url = https://github.com/jpalardy/vim-slime.git
 [submodule "nvim-ipy"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-ipy
-  	url = https://github.com/bfredl/nvim-ipy.git
+  url = https://github.com/bfredl/nvim-ipy.git
+[submodule "mason.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/mason.nvim
+  url = https://github.com/williamboman/mason.nvim.git
+[submodule "mason-lspconfig.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/mason-lspconfig.nvim
+  url = https://github.com/williamboman/mason-lspconfig.nvim.git
+[submodule "jedi-vim"]
+	path = HOME/.config/nvim/pack/plugins/start/jedi-vim
+  url = https://github.com/davidhalter/jedi-vim.git
+[submodule "nvim-lspconfig"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-lspconfig
+  url = https://github.com/neovim/nvim-lspconfig.git
+[submodule "mason-null-ls.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/mason-null-ls.nvim
+  url = https://github.com/jay-babu/mason-null-ls.nvim.git
+[submodule "mason-tool-installer.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/mason-tool-installer.nvim
+  url = https://github.com/WhoIsSethDaniel/mason-tool-installer.nvim.git
+[submodule "null-ls.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/null-ls.nvim
+  url = https://github.com/jose-elias-alvarez/null-ls.nvim.git
+[submodule "nvim-dap"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-dap
+  url = https://github.com/mfussenegger/nvim-dap.git
+[submodule "nvim-dap-python"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-dap-python
+  url = https://github.com/mfussenegger/nvim-dap-python.git
+[submodule "nvim-treesitter"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-treesitter
+  url = https://github.com/nvim-treesitter/nvim-treesitter.git
+[submodule "nvim-dap-ui"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-dap-ui
+  url = https://github.com/rcarriga/nvim-dap-ui.git
+[submodule "nvim-dap-virtual-text"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-dap-virtual-text
+  url = https://github.com/theHamsta/nvim-dap-virtual-text.git
+[submodule "nvim-nio"]
+	path = HOME/.config/nvim/pack/plugins/start/nvim-nio
+  url = https://github.com/nvim-neotest/nvim-nio.git
+
 
 [submodule "dracula-alacritty"]
 	path = alacritty/alacritty

@@ -26,3 +26,7 @@ require "plugins.lualine"
 require "plugins.impatient"
 require "plugins.indentline"
 require "plugins.autocommands"
+require "plugins.null-ls"
+require "plugins.dap"
+require "plugins.mason"
+
