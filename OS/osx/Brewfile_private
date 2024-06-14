@@ -198,6 +198,7 @@ cask "vlc"
 cask "xquartz"
 cask "zoom"
 mas "Amphetamine", id: 937984704
+mas "Bitwarden", id: 1352778147
 mas "com.alice.mac.GetPlainText", id: 508368068
 mas "DaVinci Resolve", id: 571213070
 mas "Easy CSV Editor", id: 1171346381
