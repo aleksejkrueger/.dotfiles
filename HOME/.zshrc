@@ -88,6 +88,14 @@ if command -v pyenv 1>/dev/null 2>&1; then
  eval "$(pyenv init -)"
 fi
 
+# create / activate venv in $DOTFILES
+if [ -d "$HOME/.dotfiles/.venv/" ]; then
+    source "$HOME/.dotfiles/.venv/bin/activate"
+else
+    python3 -m venv "$HOME/.dotfiles/.venv/"
+    source "$HOME/.dotfiles/.venv/bin/activate"
+fi
+
 # install asdf 
 # https://asdf-vm.com/guide/getting-started.html
 # git clone https://github.com/asdf-vm/asdf.git ~/.asdf --branch v0.14.0
@@ -110,4 +118,4 @@ if [ -f "$HOME/.work/work.zsh" ]; then
 fi
 
 clear
-GRANTED_ENABLE_AUTO_REASSUME=true
+

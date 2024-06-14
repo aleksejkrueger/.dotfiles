@@ -1,0 +1,11 @@
+jupytext
+ipython
+tldextract
+pip-tools
+wheel
+spyder
+spyder-kernels
+neovim
+pynvim
+jupyter
+JLDracula

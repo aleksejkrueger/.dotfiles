@@ -119,35 +119,6 @@ rust:
 asdf:
 	git clone https://github.com/asdf-vm/asdf.git $(HOME)/.asdf --branch v0.14.0;
 
-PYVERSION := "3.11.6"
-
-.PHONY: python
-#curl -sSL https://install.python-poetry.org | python3 -
-python:
-	@if [ "$(OS)" = "osx" ]; then \
-		command -v pyenv >/dev/null  || { \
-			echo "pyenv is not installed. Installing pyenv via Homebrew..."; \
-			brew install pyenv; \
-		}; \
-	elif [ "$(OS)" = "linux" ]; then \
-		echo "nothing so far"; \
-	elif [ "$(OS)" = "wsl" ]; then \
-		command -v pyenv >/dev/null 2>&1 || { \
-			echo "pyenv is not installed. Installing pyenv via apt..."; \
-			curl https://pyenv.run | bash; \
-		}; \
-	fi
-	@if test -f $(CUR_DIR)/.python-version; then \
-		echo " 󱔎 "; \
-	else \
-		pyenv local $(PYVERSION); \
-	fi
-	@if test -d $(CUR_DIR)/.venv/; then \
-		echo " 󱔎 "; \
-	else \
-		python -m venv .venv; \
-	fi
-
 .PHONY: repos
 repos:
 	git clone https://github.com/alexchaichan/data-science.git $(HOME)/data-science; \
