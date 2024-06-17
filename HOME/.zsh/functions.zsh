@@ -6,6 +6,13 @@ command_exists() {
     type "$command" >/dev/null 2>&1
 }
 
+function cd() {
+    builtin cd "$@" || return
+    if [ -f ".venv/bin/activate" ]; then
+        source .venv/bin/activate
+    fi
+}
+
 ######################################################################
 # aliasas						                                     #
 ######################################################################
@@ -96,32 +103,6 @@ connect(){
 # disconnect
 disconnect(){
     umount /Volumes/vpvs
-}
-
-##########################################################################################################
-#pluginmanager                                                                                           #
-##########################################################################################################
-
-# zsh
-function zsh_add_plugin() {
-  PLUGIN_NAME=$(echo $1 | cut -d "/" -f 2)
-  git clone "https://github.com/$1.git" "$ZDOTDIR/$PLUGIN_NAME"
-}
-
-#neovim
-function vim_add_plugin() {
-  PLUGIN_NAME=$(echo $1 | cut -d "/" -f 2)
-  git clone "https://github.com/$1.git" "$VDOTDIR/pack/plugins/start/$PLUGIN_NAME"
-}
-
-#tmux
-function tmux_add_plugin() {
-  PLUGIN_NAME=$(echo $1 | cut -d "/" -f 2)
-  git clone "https://github.com/$1.git" "$TDOTDIR/plugins/$PLUGIN_NAME"
-}
-
-function PlugUpdate(){
-  cd $VDOTDIR/pack/plugins/start && find . -maxdepth 3 -name .git -type d | rev | cut -c 6- | rev | xargs -I {} git -C {} pull ; cd && cd $ZDOTDIR && find . -maxdepth 3 -name .git -type d | rev | cut -c 6- | rev | xargs -I {} git -C {} pull ; cd && cd $TDOTDIR && find . -maxdepth 3 -name .git -type d | rev | cut -c 6- | rev | xargs -I {} git -C {} pull ; cd
 }
 
 #####################################################
@@ -225,7 +206,6 @@ wifi-scan(){
 wifi-connect(){
   networksetup -setairportnetwork en0 $1 $2
 }
-
 spt(){
 
   if [[ "$os" == "osx" && -z $(timeout 1s top | grep -m1 spotifyd | awk '{print $2}') ]]; then
