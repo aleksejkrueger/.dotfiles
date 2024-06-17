@@ -52,7 +52,7 @@ alias gitpullall="find . -maxdepth 300 -name .git -type d | rev | cut -c 6- | re
 ######################################################################
 
 # ls darcula
-alias l="colorls --dark"
+alias l="colorls --dark -a"
 
 # get easy keyboard hex codes
 hex(){
