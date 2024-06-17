@@ -16,11 +16,11 @@ dots(){
 }
 
 push-dots(){
-  cd $DOTFILES && gitpush && cd $HOME && cd $HOME/.password-store && gitpush && cd $HOME/data-science && gitpush && cd $HOME/cheatsheets && gitpush && cd $HOME/Templates && gitpush && cd $HOME
+  cd $DOTFILES && gitpush && cd $HOME && cd $HOME/data-science && gitpush && cd $HOME/cheatsheets && gitpush && cd $HOME/Templates && gitpush && cd $HOME
 }
 
 pull-dots(){
-  cd $DOTFILES && git pull && cd $HOME && cd $HOME/.password-store && git pull && cd $HOME/data-science && git pull && cd $HOME/cheatsheets && git pull && cd $HOME/Templates && git pull && cd $HOME
+  cd $DOTFILES && git pull && cd $HOME && cd $HOME/data-science && git pull && cd $HOME/cheatsheets && git pull && cd $HOME/Templates && git pull && cd $HOME
 }
 # open this file
 funs(){

@@ -81,6 +81,7 @@ export GOPATH=$HOME/go
 export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin"
 export PATH=:"$PATH:$HOME/Library/Python/3.9/bin"
 export PATH="$PATH:$HOME/.cargo/bin"
+export PATH="$PATH:$HOME/.dotfiles/.venv/bin/"
 
 export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"

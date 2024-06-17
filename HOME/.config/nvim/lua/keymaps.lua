@@ -20,6 +20,7 @@ vim.g.maplocalleader = " "
 keymap("n", "<C-v>", ":vsplit<cr>", opts)
 keymap("n", "<C-d>", ":split<cr>", opts)
 keymap("n", "<C-t>", ":tabnew<cr>", opts)
+keymap("n", "<C-w>", ":close<cr>", opts)
 
 -- better window navigation
 keymap("n", "<C-h>", "<C-w>h", opts)
@@ -78,9 +79,9 @@ keymap("v", "{", "l:s/\\%V\\(.*\\)\\%V/{\\1}/<CR>", opts)
 -- keymap("t", "<C-l>", "<C-\\><C-N><C-w>l", term_opts)
 
 -- alternate way to save
-keymap("", "<C-w>", "<Nop>", opts) -- unmap first
+keymap("", "<C-s>", "<Nop>", opts) -- unmap first
 -- save with ctr+w aswell
-keymap("", "<C-w>", ":w<CR>", opts)
+keymap("", "<C-s>", ":w<CR>", opts)
 -- alternate way to quit
 keymap("", "<C-q>", "<Nop>", opts) -- unmap first
 keymap("", "<C-q>", ":q!<CR>", opts) -- quit with ctrl+q
