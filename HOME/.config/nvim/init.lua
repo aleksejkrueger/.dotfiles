@@ -13,14 +13,11 @@
 -- Get the HOME directory
 local home_dir = os.getenv("HOME")
 
--- Construct the full path to the .work/vim.lua file
-local vim_lua_path = home_dir .. "/.work/vim.lua"
-
--- Source the vim.lua file
-vim.cmd("source " .. vim_lua_path)
 -- basics
 require "settings"
 require "keymaps"
+local vim_work_lua_path = home_dir .. "/.work/vim.lua"
+vim.cmd("source " .. vim_work_lua_path)
 -- plugins
 require "plugins.cmp"
 require "plugins.telescope"
