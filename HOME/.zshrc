@@ -10,7 +10,7 @@
 #     |  |:/        /__/:/       \  \:\
 #     |__|/         \__\/         \__\/
 
-os=$("$HOME/.dotfiles/scripts/detect_os")
+os=$("$HOME/.dotfiles/src/detect_os")
 
 export HOME="$(echo -n $(bash -c "cd ~${USER} && pwd"))"
 export DOTFILES=$HOME/.dotfiles

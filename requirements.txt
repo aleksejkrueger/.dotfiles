@@ -5,6 +5,7 @@ pip-tools
 wheel
 spyder
 spyder-kernels
+spyder-notebook
 neovim
 pynvim
 jupyter

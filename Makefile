@@ -6,12 +6,11 @@ help:
 	@echo "  setup        - Run the setup process which includes test, scripts, symlinks, alacritty, and os."
 	@echo "  os           - Perform OS-specific setup tasks (macOS, Linux, or WSL)."
 	@echo "  scripts      - Make all scripts in the 'scripts' directory executable and symlink them to '/usr/local/bin/'."
-	@echo "  symlinks     - Create necessary symlinks by running the 'scripts/symlinks' script."
+	@echo "  symlinks     - Create necessary symlinks by running the 'src/symlinks' script."
 	@echo "  alacritty    - Setup Alacritty configuration based on the detected OS."
 	@echo "  subl         - Initialize Sublime Text configuration."
 	@echo "  rust         - Install Rust using rustup."
 	@echo "  asdf         - Clone the asdf version manager repository."
-	@echo "  python       - Install pyenv and set the global Python version to 3.11.6."
 	@echo "  repos        - Clone various Git repositories for data science, cheatsheets, templates, and Pandoc filters."
 	@echo "  passwords    - Retrieve and set up credentials using pass."
 
@@ -19,7 +18,7 @@ help:
 ifeq ($(OS),Windows_NT)
     OS := windows
 else
-    OS := $(shell scripts/detect_os)
+    OS := $(shell src/detect_os)
 endif
 
 CUR_DIR := $(shell pwd)
@@ -37,12 +36,12 @@ setup: test scripts symlinks os
 
 .PHONY: scripts
 scripts:
-	chmod +x $(CUR_DIR)/scripts/*; \
-	sudo ln -sf $(CUR_DIR)/scripts/* /usr/local/bin/;
+	chmod +x $(CUR_DIR)/src/*; \
+	sudo ln -sf $(CUR_DIR)/src/* /usr/local/bin/;
 
 .PHONY: symlinks
 symlinks: alacritty subl
-	$(shell scripts/symlinks)
+	$(shell src/symlinks)
 
 .PHONY: alacritty
 alacritty:

@@ -13,24 +13,11 @@
 -- Get the HOME directory
 local home_dir = os.getenv("HOME")
 
--- Function to check if a file exists
-local function file_exists(file)
-  local f = io.open(file, "r")
-  if f then
-    io.close(f)
-    return true
-  else
-    return false
-  end
-end
-
 -- basics
 require "settings"
 require "keymaps"
 local vim_work_lua_path = home_dir .. "/.work/vim.lua"
-if file_exists(vim_work_lua_path) then
-  vim.cmd("source " .. vim_work_lua_path)
-end
+vim.cmd("source " .. vim_work_lua_path)
 -- plugins
 require "plugins.cmp"
 require "plugins.telescope"
