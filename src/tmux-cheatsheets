@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-lang=`ls $HOME/cheatsheets/ | fzf`;
+lang=`ls $HOME/notes/ | fzf`;
 
 if [[ "$lang" == "cht" ]]; then
 
@@ -9,17 +9,17 @@ if [[ "$lang" == "cht" ]]; then
 
 else
 
-  selected=`ls $HOME/cheatsheets/$lang | fzf`
+  selected=`ls $HOME/notes/$lang | fzf`
 
 fi
 
 if [[ "$selected" == *pdf ]]; then
 
-   zathura $HOME/cheatsheets/$lang/$selected;
+   zathura $HOME/notes/$lang/$selected;
 
  else
 
-  tmux neww zsh -c  "bat $HOME/cheatsheets/$lang/$selected & while [ : ]; do sleep 1; done"
+  tmux neww zsh -c  "bat $HOME/notes/$lang/$selected & while [ : ]; do sleep 1; done"
 
 fi
 

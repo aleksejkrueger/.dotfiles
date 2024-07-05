@@ -118,5 +118,9 @@ if [ -f "$HOME/.work/work.zsh" ]; then
     source "$HOME/.work/work.zsh"
 fi
 
+# export AWS_CA_BUNDLE=$HOME/.certificates/all-ca-certs.crt
+# export SSL_CERT_FILE=$HOME/.certificates/all-ca-certs.crt
+# export REQUESTS_CA_BUNDLE=$HOME/.certificates/all-ca-certs.crt
+
 clear
 

@@ -13,7 +13,6 @@ help:
         @echo "  subl         - Initialize Sublime Text configuration."
         @echo "  rust         - Install Rust using rustup."
         @echo "  asdf         - Clone the asdf version manager repository."
-        @echo "  python       - Install pyenv and set the global Python version to 3.11.6."
         @echo "  repos        - Clone various Git repositories for data science, cheatsheets, templates, and Pandoc filters."
         @echo "  passwords    - Retrieve and set up credentials using pass."
 ```
