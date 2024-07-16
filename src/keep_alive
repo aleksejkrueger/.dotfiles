@@ -1,0 +1,10 @@
+#!/bin/bash
+
+server=$1
+
+while true; do
+    echo "connecting to $server"
+    ssh $server
+    echo "sleeping"
+    sleep 1
+done
