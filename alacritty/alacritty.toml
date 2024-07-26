@@ -31,5 +31,5 @@ TERM = "alacritty"
 multiplier = 0
 
 [window.dimensions]
-columns = 256
-lines = 65
+columns = 180
+lines = 50

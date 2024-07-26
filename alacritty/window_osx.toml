@@ -2,3 +2,7 @@
 opacity = 0.9
 startup_mode = "Windowed"
 decorations = "Buttonless"
+# Window startup position
+position = "None"  # Default: "None"
+padding = { x = 0, y = 0 }  # Default: x = 0, y = 0
+
