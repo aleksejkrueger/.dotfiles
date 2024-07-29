@@ -37,7 +37,8 @@ duti -s com.sublimetext.4 .dek all
 duti -s com.sublimetext.4 .dec all
 
 # skim
-duti -s net.sourceforge.skim-app.skim .pdf all
+# duti -s net.sourceforge.skim-app.skim .pdf all
+duti -s com.brave.Browser com.adobe.pdf all
 
 # libreoffice
 duti -s org.libreoffice.script .docx all
