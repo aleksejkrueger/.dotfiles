@@ -23,6 +23,9 @@
 [submodule "dracula-zsh-syntax-highlighting"]
 	path = HOME/.zsh/dracula-zsh-syntax-highlighting
 	url = https://github.com/dracula/zsh-syntax-highlighting.git
+[submodule "fzf-git.sh"]
+	path = HOME/.zsh/fzf-git.sh
+	url = https://github.com/junegunn/fzf-git.sh.git
 
 # tmux
 [submodule "tmux-battery"]
