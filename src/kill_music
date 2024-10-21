@@ -1,0 +1,6 @@
+#!/bin/bash
+
+while true; do
+    pkill  Music && \
+    sleep 1
+done
