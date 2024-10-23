@@ -161,8 +161,4 @@ fi
 # export SSL_CERT_FILE=$HOME/.certificates/all-ca-certs.crt
 # export REQUESTS_CA_BUNDLE=$HOME/.certificates/all-ca-certs.crt
 
-# kill apple music proces
-kill kill_music 
-kill_music &
-
 clear
