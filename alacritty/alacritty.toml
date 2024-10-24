@@ -1,3 +1,4 @@
+[general]
 import = ["~/.alacritty/keybindings.toml", "~/.alacritty/shell.toml", "~/.alacritty/window.toml", "~/.alacritty/alacritty/dracula.toml"]
 
 [font]
