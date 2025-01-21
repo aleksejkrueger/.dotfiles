@@ -11,9 +11,9 @@
 #     \/__/         \/__/         \/__/
 
 [user]
-  name = ${GIT_AUTHOR_NAME}
-  email = ${GIT_AUTHOR_EMAIL}
-  signingkey = B50CCA3A30B61127
+  name = 
+  email = 
+  ; signingkey = B50CCA3A30B61127
 [credential]
   helper = !pass-git-helper $@
 [core]

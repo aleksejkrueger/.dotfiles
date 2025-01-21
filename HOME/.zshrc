@@ -39,6 +39,9 @@ source $DOTFILES/HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 source $DOTFILES/HOME/.zsh/zsh-autopair/autopair.zsh
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/web-search/web-search.plugin.zsh
 source $DOTFILES/HOME/.zsh/powerlevel10k/powerlevel10k.zsh-theme
+source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kube-ps1/kube-ps1.plugin.zsh
+source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kubectl/kubectl.plugin.zsh
+source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kubectx/kubectx.plugin.zsh
 
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
@@ -162,3 +165,13 @@ fi
 # export REQUESTS_CA_BUNDLE=$HOME/.certificates/all-ca-certs.crt
 
 clear
+
+source "/opt/homebrew/opt/kube-ps1/share/kube-ps1.sh"
+PS1='$(kube_ps1)'$PS1
+
+# PROMPT='$(kube_ps1)'$PROMPT # or RPROMPT='$(kube_ps1)'
+
+#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
+export SDKMAN_DIR="$HOME/.sdkman"
+[[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+
