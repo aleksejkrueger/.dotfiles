@@ -1,9 +1,9 @@
 {
 	"browser": "qutebrowser",
 
-	"css": [
+	// "css": [
         "/Users/user/.dotfiles/styles/dracula_markdown.css"
-    ],
+  //  ],
     "enable_mathjax": true,
     "js": [
         "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js",
