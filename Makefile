@@ -8,7 +8,6 @@ help:
 	@echo "  scripts      - Make all scripts in the 'scripts' directory executable and symlink them to '/usr/local/bin/'."
 	@echo "  symlinks     - Create necessary symlinks by running the 'src/symlinks' script."
 	@echo "  alacritty    - Setup Alacritty configuration based on the detected OS."
-	@echo "  subl         - Initialize Sublime Text configuration."
 	@echo "  rust         - Install Rust using rustup."
 	@echo "  asdf         - Clone the asdf version manager repository."
 	@echo "  repos        - Clone various Git repositories for data science, cheatsheets, templates, and Pandoc filters."

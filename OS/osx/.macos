@@ -425,6 +425,14 @@ defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
 # Stop iTunes from responding to the keyboard media keys
 launchctl unload -w /System/Library/LaunchAgents/com.apple.rcd.plist
 
+mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/; \
+			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/; \
+			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
+			sudo ln -sf $HOME/.dotfiles/HOME/.config/sublime-text/Sublime\ Text/Packages/User/* $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
+			sudo ln -sf $HOME/.dotfiles/HOME/.config/sublime-text/Sublime\ Text/Packages/Dracula\ Color\ Scheme $(HOME)/Library/Application\ Support/Sublime\ Text/Packages; \
+			sudo rm -f $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/Preferences.sublime-settings; \
+			sudo cp -f $HOME/.dotfiles/HOME/.config/sublime-text/Sublime\ Text/Packages/User/Preferences.sublime-settings $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
+
 ###############################################################################
 
 # Kill affected applications

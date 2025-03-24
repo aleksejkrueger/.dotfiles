@@ -2,10 +2,7 @@
 	"bootstrapped": true,
 	"in_process_packages":
 	[
-		"LaTeXTools",
-		"MarkdownPreview",
-		"R-IDE",
-		"rainbow_csv",
+		"SideBarEnhancements",
 	],
 	"installed_packages":
 	[
