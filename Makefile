@@ -48,18 +48,11 @@ alacritty:
 	@if [ "$(OS)" = "osx" ]; then \
 		ln -sf $(HOME)/.dotfiles/alacritty/alacritty_osx.toml $(HOME)/.config/alacritty.toml; \
 		mkdir -p $(HOME)/.alacritty; \
-		ln -sf $(HOME)/.dotfiles/alacritty/alacritty/ $(HOME)/.alacritty/; \
 	elif [ "$(OS)" = "linux" ]; then \
 		echo " "; \
 	elif [ "$(OS)" = "wsl" ]; then \
 		export windows_username=$(basename $(wslpath $(wslvar USERPROFILE))); \
 		cp -f $(HOME)/.dotfiles/alacritty/alacritty_wsl.toml /mnt/c/Users/$(windows_username)/AppData/Roaming/alacritty/alacritty.toml; \
-		mkdir -p /mnt/c/Users/$(windows_username)/.alacritty; \
-		cp -f $(HOME)/.dotfiles/alacritty/*wsl*.toml /mnt/c/Users/$(windows_username)/.alacritty; \
-		cp -rf $(HOME)/.dotfiles/alacritty/alacritty/ /mnt/c/Users/$(windows_username)/.alacritty; \
-		for file in /mnt/c/Users/$(windows_username)/.alacritty/*_wsl.toml; do \
-			mv -- "$$file" "$${file%_wsl.toml}.toml"; \
-		done; \
 	fi
 
 .PHONY: subl
