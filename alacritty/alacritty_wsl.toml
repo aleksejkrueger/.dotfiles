@@ -1,0 +1,205 @@
+[general]
+import = ["~/.alacritty/alacritty/dracula.toml"]
+
+[shell]
+args = ["tmux attach || tmux || zsh", "gpg-connect-agent reloadagent /bye"]
+program = "wsl"
+
+[font]
+size = 14
+
+[font.bold]
+family = "Monaco Nerd Font"
+
+[font.bold_italic]
+family = "Monaco Nerd Font"
+
+[font.italic]
+family = "Monaco Nerd Font"
+
+[font.normal]
+family = "Monaco Nerd Font"
+
+[cursor]
+blink_interval = 750
+thickness = 0.2
+unfocused_hollow = true
+
+[cursor.style]
+blinking = "Always"
+shape = "Beam"
+
+[env]
+TERM = "alacritty"
+
+[scrolling]
+multiplier = 0
+
+[window]
+opacity = 0.9
+startup_mode = "Maximized"
+decorations = "Full"
+
+[window.dimensions]
+columns = 189
+lines = 51
+
+[[keyboard.bindings]]
+chars = "\u0006v"
+key = "D"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006h"
+key = "D"
+mods = "Alt|Shift"
+
+[[keyboard.bindings]]
+chars = "\u0006x"
+key = "W"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006t"
+key = "T"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u00060"
+key = "Key0"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u00061"
+key = "Key1"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u00062"
+key = "Key2"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u00063"
+key = "Key3"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u00064"
+key = "Key4"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u00065"
+key = "Key5"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u00066"
+key = "Key6"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u00067"
+key = "Key7"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "{"
+key = 28
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "}"
+key = 25
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = '\'
+key = 26
+mods = "Alt|Shift"
+
+[[keyboard.bindings]]
+chars = "|"
+key = 26
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "["
+key = 23
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "]"
+key = 22
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006\u001B[D"
+key = "Left"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006\u001B[C"
+key = "Right"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006\u001B[A"
+key = "Up"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006\u001B[B"
+key = "Down"
+mods = "Alt"
+
+[[keyboard.bindings]]
+action = "None"
+key = "L"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006\u001B[D"
+key = "H"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006\u001B[C"
+key = "L"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006\u001B[A"
+key = "K"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006\u001B[B"
+key = "J"
+mods = "Alt"
+
+[[keyboard.bindings]]
+chars = "\u0006p"
+key = "Left"
+mods = "Control"
+
+[[keyboard.bindings]]
+chars = "\u0006n"
+key = "Right"
+mods = "Control"
+
+[[keyboard.bindings]]
+action = "Paste"
+key = "V"
+mods = "Control"
+
+[[keyboard.bindings]]
+action = "Copy"
+key = "C"
+mods = "Control"
+
+[[keyboard.bindings]]
+chars = "\u0003"
+key = "C"
+mods = "Alt"

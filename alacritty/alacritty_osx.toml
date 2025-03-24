@@ -1,3 +1,57 @@
+[general]
+import = ["~/.dotfiles/alacritty/alacritty/dracula.toml"]
+
+[terminal]
+  [terminal.shell]
+  program = "/bin/zsh"
+  args = [
+    "--login",
+    "-c",
+    "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux; /opt/homebrew/bin/gpg-connect-agent reloadagent /bye; exec $SHELL"
+  ]
+
+[font]
+size = 14
+
+[font.bold]
+family = "Monaco Nerd Font"
+
+[font.bold_italic]
+family = "Monaco Nerd Font"
+
+[font.italic]
+family = "Monaco Nerd Font"
+
+[font.normal]
+family = "Monaco Nerd Font"
+
+[cursor]
+blink_interval = 750
+thickness = 0.2
+unfocused_hollow = true
+
+[cursor.style]
+blinking = "Always"
+shape = "Beam"
+
+[env]
+TERM = "alacritty"
+
+[scrolling]
+multiplier = 0
+
+[window]
+opacity = 0.9
+startup_mode = "Windowed"
+decorations = "Buttonless"
+# Window startup position
+position = "None"  # Default: "None"
+padding = { x = 0, y = 0 }  # Default: x = 0, y = 0
+
+[window.dimensions]
+columns = 189
+lines = 51
+
 [[keyboard.bindings]]
 chars = "\u0006v"
 key = "D"

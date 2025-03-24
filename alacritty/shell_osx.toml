@@ -1,4 +1,0 @@
-[terminal]
-[terminal.shell]
-args = ["--login", "-c", "tmux-wrapper attach || tmux-wrapper ; pkill spotifyd ; pkill spt ; gpg-connect-agent-wrapper reloadagent /bye"]
-program = "/bin/zsh"
