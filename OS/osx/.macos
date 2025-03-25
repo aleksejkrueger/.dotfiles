@@ -433,6 +433,8 @@ mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/; \
 			sudo rm -f $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/Preferences.sublime-settings; \
 			sudo cp -f $HOME/.dotfiles/HOME/.config/sublime-text/Sublime\ Text/Packages/User/Preferences.sublime-settings $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
 
+ln -sf $HOME/.dotfiles/HOME/.config/alacritty/alacritty_osx/alacritty.toml $HOME/.config/alacritty.toml
+
 ###############################################################################
 
 # Kill affected applications

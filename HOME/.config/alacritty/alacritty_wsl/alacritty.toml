@@ -1,5 +1,5 @@
 [general]
-import = ["~/.alacritty/alacritty/dracula.toml"]
+import = ["~/.dotfiles/HOME/.config/alacritty/alacritty/dracula.toml"]
 
 [shell]
 args = ["tmux attach || tmux || zsh", "gpg-connect-agent reloadagent /bye"]

@@ -1,5 +1,5 @@
 [general]
-import = ["~/.dotfiles/alacritty/alacritty/dracula.toml"]
+import = ["~/.dotfiles/HOME/.config/alacritty/alacritty/dracula.toml"]
 
 [terminal]
   [terminal.shell]

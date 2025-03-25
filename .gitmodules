@@ -210,7 +210,7 @@
 
 
 [submodule "dracula-alacritty"]
-	path = alacritty/alacritty
+	path = HOME/.config/alacritty/alacritty
 	url = https://github.com/dracula/alacritty.git
 [submodule "dracula"]
 	path = HOME/.config/qutebrowser/dracula

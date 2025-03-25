@@ -7,7 +7,6 @@ help:
 	@echo "  os           - Perform OS-specific setup tasks (macOS, Linux, or WSL)."
 	@echo "  scripts      - Make all scripts in the 'scripts' directory executable and symlink them to '/usr/local/bin/'."
 	@echo "  symlinks     - Create necessary symlinks by running the 'src/symlinks' script."
-	@echo "  alacritty    - Setup Alacritty configuration based on the detected OS."
 	@echo "  rust         - Install Rust using rustup."
 	@echo "  asdf         - Clone the asdf version manager repository."
 	@echo "  repos        - Clone various Git repositories for data science, cheatsheets, templates, and Pandoc filters."
@@ -30,7 +29,7 @@ test:
 	@echo 'USERNMAE = $(USERNMAE)'
 
 .PHONY: setup
-setup: test scripts symlinks os
+setup: test scripts stow os
 	@echo "fnished"
 
 .PHONY: scripts
@@ -38,34 +37,9 @@ scripts:
 	chmod +x $(CUR_DIR)/src/*; \
 	sudo ln -sf $(CUR_DIR)/src/* /usr/local/bin/;
 
-.PHONY: symlinks
-symlinks: alacritty subl
-	$(shell src/symlinks)
-
-.PHONY: alacritty
-alacritty:
-	@if [ "$(OS)" = "osx" ]; then \
-		ln -sf $(HOME)/.dotfiles/alacritty/alacritty_osx.toml $(HOME)/.config/alacritty.toml; \
-		mkdir -p $(HOME)/.alacritty; \
-	elif [ "$(OS)" = "linux" ]; then \
-		echo " "; \
-	elif [ "$(OS)" = "wsl" ]; then \
-		export windows_username=$(basename $(wslpath $(wslvar USERPROFILE))); \
-		cp -f $(HOME)/.dotfiles/alacritty/alacritty_wsl.toml /mnt/c/Users/$(windows_username)/AppData/Roaming/alacritty/alacritty.toml; \
-	fi
-
-.PHONY: subl
-subl:
-	@if [ "$(OS)" = "osx" ]; then \
-		echo "init sublime text"; \
-			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/; \
-			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/; \
-			mkdir -p $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
-			sudo ln -sf $(CUR_DIR)/HOME/.config/sublime-text/Sublime\ Text/Packages/User/* $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
-			sudo ln -sf $(CUR_DIR)/HOME/.config/sublime-text/Sublime\ Text/Packages/Dracula\ Color\ Scheme $(HOME)/Library/Application\ Support/Sublime\ Text/Packages; \
-			sudo rm -f $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/Preferences.sublime-settings; \
-			sudo cp -f $(CUR_DIR)/HOME/.config/sublime-text/Sublime\ Text/Packages/User/Preferences.sublime-settings $(HOME)/Library/Application\ Support/Sublime\ Text/Packages/User/; \
-	fi
+.PHONY: stow
+	cd HOME \
+	stow --ignore='\.DS_Store' -t $(HOME) .
 
 .PHONY: os
 os:
