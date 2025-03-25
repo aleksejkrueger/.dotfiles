@@ -6,7 +6,7 @@ help:
 	@echo "  setup        - Run the setup process which includes test, scripts, symlinks, alacritty, and os."
 	@echo "  os           - Perform OS-specific setup tasks (macOS, Linux, or WSL)."
 	@echo "  scripts      - Make all scripts in the 'scripts' directory executable and symlink them to '/usr/local/bin/'."
-	@echo "  symlinks     - Create necessary symlinks by running the 'src/symlinks' script."
+	@echo "  stow     	  - Create necessary symlinks by using stow"
 	@echo "  rust         - Install Rust using rustup."
 	@echo "  asdf         - Clone the asdf version manager repository."
 	@echo "  repos        - Clone various Git repositories for data science, cheatsheets, templates, and Pandoc filters."
@@ -38,8 +38,8 @@ scripts:
 	sudo ln -sf $(CUR_DIR)/src/* /usr/local/bin/;
 
 .PHONY: stow
-	cd HOME \
-	stow --ignore='\.DS_Store' -t $(HOME) .
+stow:
+	cd $(CURDIR)/HOME && stow --ignore='\.DS_Store' -t $(HOME) ./
 
 .PHONY: os
 os:
