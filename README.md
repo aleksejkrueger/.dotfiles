@@ -1,20 +1,18 @@
 `make help`
 
 ```zsh
-help:
-        @echo "Available targets:"
-        @echo "  help         - Display this help message."
-        @echo "  test         - Display detected OS, current directory, and username."
-        @echo "  setup        - Run the setup process which includes test, scripts, symlinks, alacritty, and os."
-        @echo "  os           - Perform OS-specific setup tasks (macOS, Linux, or WSL)."
-        @echo "  scripts      - Make all scripts in the 'scripts' directory executable and symlink them to '/usr/local/bin/'."
-        @echo "  symlinks     - Create necessary symlinks by running the 'scripts/symlinks' script."
-        @echo "  alacritty    - Setup Alacritty configuration based on the detected OS."
-        @echo "  subl         - Initialize Sublime Text configuration."
-        @echo "  rust         - Install Rust using rustup."
-        @echo "  asdf         - Clone the asdf version manager repository."
-        @echo "  repos        - Clone various Git repositories for data science, cheatsheets, templates, and Pandoc filters."
-        @echo "  passwords    - Retrieve and set up credentials using pass."
+make help:
+  Available targets:
+    help         - Display this help message.
+    test         - Display detected OS, current directory, and username.
+    setup        - Run the setup process which includes test, scripts, symlinks, alacritty, and os.
+    os           - Perform OS-specific setup tasks (macOS, Linux, or WSL).
+    scripts      - Make all scripts in the 'scripts' directory executable and symlink them to '/usr/local/bin/'.
+    stow         - Create necessary symlinks by using stow
+    rust         - Install Rust using rustup.
+    asdf         - Clone the asdf version manager repository.
+    repos        - Clone various Git repositories for data science, cheatsheets, templates, and Pandoc filters.
+    passwords    - Retrieve and set up credentials using pass.
 ```
 
 ## package manager
