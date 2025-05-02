@@ -17,5 +17,13 @@
     "bindings": {
       // "j k": ["workspace::SendKeystrokes", "escape"]
     }
+  },
+  {
+    "context": "Editor && jupyter && !ContextEditor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-enter": "repl::Run",
+      "shift-enter": "repl::RunInPlace"
+    }
   }
 ]
