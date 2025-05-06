@@ -7,6 +7,7 @@ export VDOTDIR=$CONFIG/nvim
 export TDOTDIR=$HOME/.tmux
 
 export PATH="$PATH:$HOME/.cargo/bin"
+export PATH="$PATH:$HOME/.local/lib"
 
 export EDITOR=nvim
 export VISUAL=nvim
