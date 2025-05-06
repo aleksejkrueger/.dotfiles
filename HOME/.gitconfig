@@ -11,9 +11,9 @@
 #     \/__/         \/__/         \/__/
 
 [user]
-name = 
-email =
-  ; signingkey = B50CCA3A30B61127
+	name = alexchaichan
+	email = a.chaichan@icloud.com
+  signingkey = B50CCA3A30B61127
 [credential]
   helper = !pass-git-helper $@
 [core]

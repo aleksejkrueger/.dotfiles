@@ -59,8 +59,8 @@ alias gitpullall="find . -maxdepth 300 -name .git -type d | rev | cut -c 6- | re
 ######################################################################
 
 # better ls
-alias l="colorls --dark -a"
-alias ls="eza --color=always --long --git --icons=always --no-time --no-user --no-permissions"
+#alias l="colorls --dark -a"
+#alias ls="eza --color=always --long --git --icons=always --no-time --no-user --no-permissions"
 
 # get easy keyboard hex codes
 hex(){
