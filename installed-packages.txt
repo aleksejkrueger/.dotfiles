@@ -156,3 +156,4 @@ neovim
 fzf-neovim
 less
 bat
+zoxide
