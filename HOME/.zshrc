@@ -1,3 +1,9 @@
+if command -v tmux >/dev/null 2>&1; then
+    if [ -z "$TMUX" ] ; then
+          tmux attach-session -t default || tmux new-session -s default
+            fi
+fi
+
 os=$("$HOME/.dotfiles/src/detect_os")
 export HOME="$(echo -n $(bash -c "cd ~${USER} && pwd"))"
 export DOTFILES=$HOME/.dotfiles
@@ -77,17 +83,7 @@ fpath=($ZDOTDIR/zsh-completions/src $fpath)
 # initialise completions with ZSH's compinit
 autoload -Uz compinit && compinit
 
-
-
-
 # zoxide
 eval "$(zoxide init zsh)"
-
-
-if command -v tmux >/dev/null 2>&1; then
-	  if [ -z "$TMUX" ] ; then
-		      tmux attach-session -t default || tmux new-session -s default
-		        fi
-fi
 
 export PS1='%/ -> '

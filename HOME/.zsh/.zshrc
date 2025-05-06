@@ -1,1 +1,1 @@
-/Users/aleksej.chaichan/.dotfiles/HOME/.zshrc
+/Users/aleksej.chaichan/Downloads/.dotfiles/HOME/.zshrc
