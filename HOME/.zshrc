@@ -8,6 +8,7 @@ export TDOTDIR=$HOME/.tmux
 
 export PATH="$PATH:$HOME/.cargo/bin"
 export PATH="$PATH:$HOME/.local/lib"
+export PATH="$PATH:$HOME/.local/bin"
 
 export EDITOR=nvim
 export VISUAL=nvim
