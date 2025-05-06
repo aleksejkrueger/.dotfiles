@@ -44,7 +44,7 @@ bindkey "^[[1~" beginning-of-line
 bindkey "^[[4~" end-of-line
 
 # fzf
-eval "$(fzf --zsh)"
+#eval "$(fzf --zsh)"
 
 _fzf_compgen_path() {
   fd --hidden --exclude .git . "$1"
@@ -64,10 +64,10 @@ _fzf_comprun() {
   shift
 
   case "$command" in
-    cd)             fzf --preview "eza --tree --color=always {} | head -200" "$@" ;;
+    cd)             fzf --preview "cd --tree --color=always {} | head -200" "$@" ;;
     export|unset)   fzf --preview "echo \$${(P)1}" "$@" ;;  # Assume $1 is used as variable name
     ssh)            fzf --preview "dig {}" "$@" ;;
-    *)              fzf --preview "bat -n --color=always --line-range :500 {}" "$@" ;;
+    *)              fzf --preview "cat -n --color=always --line-range :500 {}" "$@" ;;
   esac
 }
 
