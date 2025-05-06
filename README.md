@@ -26,7 +26,7 @@ apk add $(cat installed-packages.txt)
 ## clone `.dotfiles`
 
 ```
-git clone --recurse-submodules https://github.com/alexchaichan/.dotfiles.git
+git clone --branch ish --recurse-submodules https://github.com/alexchaichan/.dotfiles.git
 cd ~/.dotfiles
 git switch ish
 git submodule update --init --recursive
