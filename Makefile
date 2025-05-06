@@ -41,37 +41,6 @@ scripts:
 stow:
 	cd $(CURDIR)/HOME && stow --ignore='\.DS_Store' -t $(HOME) ./
 
-.PHONY: os
-os:
-	@read -p "Choose an option (work/private): " OPTION; \
-	DEVICE=$$OPTION; \
-	export DEVICE; \
-	if [ "$(OS)" = "osx" ]; then \
-		echo "$(OS) detected"; \
-		echo "run .macos"; \
-		sudo -v; \
-		while true; do sudo -n true; sleep 60; kill -0 $$ || exit; done 2>/dev/null & \
-		bash -c "source $(CUR_DIR)/OS/osx/.macos"; \
-		echo "install Brewfile"; \
-		brew bundle --file=$(CUR_DIR)/OS/osx/Brewfile_$${DEVICE}; \
-		echo "source duti-file"; \
-		bash -c "source $(CUR_DIR)/OS/osx/duti.sh"; \
-		mkdir -p $(HOME)/.qutebrowser; \
-		ln -sf $(HOME)/.dotfiles/HOME/.config/qutebrowser/* $(HOME)/.qutebrowser/; \
-	elif [ "$(OS)" = "linux" ]; then \
-		echo "$(OS) detected"; \
-	elif [ "$(OS)" = "wsl" ]; then \
-		echo "$(OS) detected"; \
-		echo "install packages"; \
-		sudo apt install -y zsh procps curl file git tmux ranger; \
-		echo "install linuxbrew"; \
-		/bin/bash -c "$(curl --no-keepalive -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"; \
-	fi
-	@if [ -z "`${SHELL} -c 'echo ${ZSH_VERSION}'`" ]; then \
-	  sudo sh -c "echo $(which zsh) >> /etc/shells" \
-	  chsh -s "$(which zsh)"; \
-	fi
-
 .PHONY: rust
 rust:
 	@echo "rust-up"; \
@@ -83,13 +52,6 @@ asdf:
 
 .PHONY: repos
 repos:
-	git clone https://github.com/alexchaichan/data-science.git $(HOME)/data-science; \
-	git clone https://github.com/alexchaichan/cheatsheets.git $(HOME)/cheatsheets; \
-	git clone https://github.com/alexchaichan/Templates.git $(HOME)/Templates; \
-	git clone https://github.com/pandoc/lua-filters.git $(HOME)/.local/share/pandoc/filters;
+	echo ""
 
-.PHONY: passwords
-passwords:
-	echo | pass spotify/spotify-tui  > $(HOME)/.config/spotify-tui/client.yml; \
-	echo | pass spotify/spotifyd  > $(HOME)/.cache/spotifyd/credentials.json;
 

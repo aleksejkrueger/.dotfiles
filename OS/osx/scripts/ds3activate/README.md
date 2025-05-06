@@ -1,1 +1,0 @@
-connect dualshock 3 controller

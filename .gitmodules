@@ -2,9 +2,6 @@
 [submodule "ohmyzsh"]
 	path = HOME/.zsh/ohmyzsh
 	url = https://github.com/ohmyzsh/ohmyzsh.git
-[submodule "powerlevel10k"]
-	path = HOME/.zsh/powerlevel10k
-	url = https://github.com/romkatv/powerlevel10k.git
 [submodule "zsh-autopair"]
 	path = HOME/.zsh/zsh-autopair
 	url = https://github.com/hlissner/zsh-autopair.git
@@ -40,18 +37,7 @@
 [submodule "tmux-df"]
 	path = HOME/.tmux/plugins/tmux-df
 	url = https://github.com/tassaron/tmux-df.git
-[submodule "tmux-jump"]
-	path = HOME/.tmux/plugins/tmux-jump
-	url = https://github.com/schasse/tmux-jump.git
-[submodule "tmux-keyboard-layout"]
-	path = HOME/.tmux/plugins/tmux-keyboard-layout
-	url = https://github.com/imomaliev/tmux-keyboard-layout.git
-[submodule "tmux-maildir-counter"]
-	path = HOME/.tmux/plugins/tmux-maildir-counter
-	url = https://github.com/tmux-plugins/tmux-maildir-counter.git
-[submodule "tmux-menus"]
-	path = HOME/.tmux/plugins/tmux-menus
-	url = https://github.com/jaclu/tmux-menus.git
+
 [submodule "tmux-online-status"]
 	path = HOME/.tmux/plugins/tmux-online-status
 	url = https://github.com/tmux-plugins/tmux-online-status.git
@@ -64,18 +50,9 @@
 [submodule "tmux-sidebar"]
 	path = HOME/.tmux/plugins/tmux-sidebar
 	url = https://github.com/tmux-plugins/tmux-sidebar.git
-[submodule "tmux-spotify-tui"]
-	path = HOME/.tmux/plugins/tmux-spotify-tui
-	url = https://github.com/alexchaichan/tmux-spotify-tui.git
 [submodule "tmux-uptime"]
 	path = HOME/.tmux/plugins/tmux-uptime
 	url = https://github.com/robhurring/tmux-uptime.git
-[submodule "tmux-urlview"]
-	path = HOME/.tmux/plugins/tmux-urlview
-	url = https://github.com/tmux-plugins/tmux-urlview.git
-[submodule "tmux-weather"]
-	path = HOME/.tmux/plugins/tmux-weather
-	url = https://github.com/xamut/tmux-weather.git
 [submodule "tmux-yank"]
 	path = HOME/.tmux/plugins/tmux-yank
 	url = https://github.com/tmux-plugins/tmux-yank.git
@@ -208,10 +185,3 @@
 	path = HOME/.config/nvim/pack/plugins/start/vim-visual-multi
   url = https://github.com/mg979/vim-visual-multi/
 
-
-[submodule "dracula-alacritty"]
-	path = HOME/.config/alacritty/alacritty
-	url = https://github.com/dracula/alacritty.git
-[submodule "dracula"]
-	path = HOME/.config/qutebrowser/dracula
-	url = https://github.com/dracula/qutebrowser-dracula-theme.git
