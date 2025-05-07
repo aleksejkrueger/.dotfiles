@@ -4,38 +4,38 @@
 #osascript -e 'id of app "Visual Studio Code"'
 
 # sublime
-duti -s com.sublimetext.4 .txt all
-duti -s com.sublimetext.4 .md all
-duti -s com.sublimetext.4 .rmd all
-duti -s com.sublimetext.4 .r all
-duti -s com.sublimetext.4 .sh all
-duti -s com.sublimetext.4 .lua all
-duti -s com.sublimetext.4 .macos all
-duti -s com.sublimetext.4 .yml all
-duti -s com.sublimetext.4 .py all
-duti -s com.sublimetext.4 .conf all
-duti -s com.sublimetext.4 .rb all
-duti -s com.sublimetext.4 .json all
-duti -s com.sublimetext.4 .mk all
-duti -s com.sublimetext.4 .h all
-duti -s com.sublimetext.4 .c all
-duti -s com.sublimetext.4 .xboardrc all
-duti -s com.sublimetext.4 .csl all
-duti -s com.sublimetext.4 .tex all
-duti -s com.sublimetext.4 .sty all
-duti -s com.sublimetext.4 .tmux.conf all
-duti -s com.sublimetext.4 .toml all
-duti -s com.sublimetext.4 .css all
-duti -s com.sublimetext.4 .cfg all
-duti -s com.sublimetext.4 .snippets all
-duti -s com.sublimetext.4 .sql all
-duti -s com.sublimetext.4 .lock all
-duti -s com.sublimetext.4 .ini all
-duti -s com.sublimetext.4 .js all
-duti -s com.sublimetext.4 .zsh all
-duti -s com.sublimetext.4 .dek all
-duti -s com.sublimetext.4 .dec all
-duti -s com.sublimetext.4 .hcl all
+duti -s dev.zed.Zed .txt all
+duti -s dev.zed.Zed .md all
+duti -s dev.zed.Zed .rmd all
+duti -s dev.zed.Zed .r all
+duti -s dev.zed.Zed .sh all
+duti -s dev.zed.Zed .lua all
+duti -s dev.zed.Zed .macos all
+duti -s dev.zed.Zed .yml all
+duti -s dev.zed.Zed .py all
+duti -s dev.zed.Zed .conf all
+duti -s dev.zed.Zed .rb all
+duti -s dev.zed.Zed .json all
+duti -s dev.zed.Zed .mk all
+duti -s dev.zed.Zed .h all
+duti -s dev.zed.Zed .c all
+duti -s dev.zed.Zed .xboardrc all
+duti -s dev.zed.Zed .csl all
+duti -s dev.zed.Zed .tex all
+duti -s dev.zed.Zed .sty all
+duti -s dev.zed.Zed .tmux.conf all
+duti -s dev.zed.Zed .toml all
+duti -s dev.zed.Zed .css all
+duti -s dev.zed.Zed .cfg all
+duti -s dev.zed.Zed .snippets all
+duti -s dev.zed.Zed .sql all
+duti -s dev.zed.Zed .lock all
+duti -s dev.zed.Zed .ini all
+duti -s dev.zed.Zed .js all
+duti -s dev.zed.Zed .zsh all
+duti -s dev.zed.Zed .dek all
+duti -s dev.zed.Zed .dec all
+duti -s dev.zed.Zed .hcl all
 
 # skim
 # duti -s net.sourceforge.skim-app.skim .pdf all
