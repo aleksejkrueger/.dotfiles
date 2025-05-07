@@ -26,6 +26,9 @@
 [submodule "fzf-git.sh"]
 	path = HOME/.zsh/fzf-git.sh
 	url = https://github.com/junegunn/fzf-git.sh.git
+[submodule "fzf-tab"]
+	path = HOME/.zsh/fzf-tab
+	url = https://github.com/Aloxaf/fzf-tab
 
 # tmux
 [submodule "tmux-battery"]
@@ -215,3 +218,6 @@
 [submodule "dracula"]
 	path = HOME/.config/qutebrowser/dracula
 	url = https://github.com/dracula/qutebrowser-dracula-theme.git
+[submodule "HOME/.zsh/fzf-tab"]
+	path = HOME/.zsh/fzf-tab
+	url = https://github.com/Aloxaf/fzf-tab
