@@ -43,7 +43,7 @@ source $DOTFILES/HOME/.zsh/powerlevel10k/powerlevel10k.zsh-theme
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kube-ps1/kube-ps1.plugin.zsh
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kubectl/kubectl.plugin.zsh
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kubectx/kubectx.plugin.zsh
-source $DOTFILES/HOME/.zsh/.fzf-tab/fzf-tab.plugin.zsh
+source $DOTFILES/HOME/.zsh/fzf-tab/fzf-tab.plugin.zsh
 
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
