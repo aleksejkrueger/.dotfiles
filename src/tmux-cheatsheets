@@ -1,30 +1,37 @@
 #!/usr/bin/env bash
-lang=`ls $HOME/notes/ | fzf`;
 
+# Set paths
+NOTES_DIR="$HOME/notes"
+DEFAULT_NOTEBOOK="$NOTES_DIR/notebook/default.md"
+
+# Select a category (language, cht, or notebook)
+lang=$(ls "$NOTES_DIR" | fzf --prompt="Choose a category: ")
+
+# Handle "cht" (cheat.sh) queries
 if [[ "$lang" == "cht" ]]; then
-
-  read -p "Enter Query: " query
-
-  query=$query
-
-else
-
-  selected=`ls $HOME/notes/$lang | fzf`
-
+    read -p "Enter Query: " query
+    tmux display-popup -E "zsh -c 'curl -s cht.sh/$query | bat'"
+    exit 0
 fi
 
-if [[ "$selected" == *pdf ]]; then
-
-   zathura $HOME/notes/$lang/$selected;
-
- else
-
-  tmux neww zsh -c  "bat $HOME/notes/$lang/$selected & while [ : ]; do sleep 1; done"
-
+# Handle "notebook" category
+if [[ "$lang" == "notebook" ]]; then
+    tmux display-popup -E "zsh -c 'bat \"$DEFAULT_NOTEBOOK\"'"
+    exit 0
 fi
 
-if [[ "$lang" == "cht" ]]; then
+# For all other categories, select a note
+selected_file=$(ls "$NOTES_DIR/$lang" | fzf --prompt="Choose a note: ")
 
-  tmux neww zsh -c "curl -s cht.sh/$query | bat & while [ : ]; do sleep 1; done"
+# If a file was selected
+if [[ -n "$selected_file" ]]; then
+    full_path="$NOTES_DIR/$lang/$selected_file"
 
+    # If it's a PDF, open with zathura
+    if [[ "$selected_file" == *.pdf ]]; then
+        zathura "$full_path"
+    else
+        tmux display-popup -E "zsh -c 'bat \"$full_path\"'"
+    fi
 fi
+
