@@ -210,7 +210,9 @@
 [submodule "vim-visual-multi"]
 	path = HOME/.config/nvim/pack/plugins/start/vim-visual-multi
   url = https://github.com/mg979/vim-visual-multi/
-
+[submodule "HOME/.config/nvim/pack/plugins/start/vimwiki"]
+	path = HOME/.config/nvim/pack/plugins/start/vimwiki
+	url = https://github.com/vimwiki/vimwiki.git
 
 [submodule "dracula-alacritty"]
 	path = HOME/.config/alacritty/alacritty
@@ -221,3 +223,4 @@
 [submodule "HOME/.zsh/fzf-tab"]
 	path = HOME/.zsh/fzf-tab
 	url = https://github.com/Aloxaf/fzf-tab
+
