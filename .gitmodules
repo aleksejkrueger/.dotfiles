@@ -213,6 +213,9 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/vimwiki"]
 	path = HOME/.config/nvim/pack/plugins/start/vimwiki
 	url = https://github.com/vimwiki/vimwiki.git
+[submodule "HOME/.config/nvim/pack/plugins/start/bufremove"]
+	path = HOME/.config/nvim/pack/plugins/start/bufremove
+	url = https://github.com/echasnovski/mini.bufremove
 
 [submodule "dracula-alacritty"]
 	path = HOME/.config/alacritty/alacritty
@@ -224,6 +227,3 @@
 	path = HOME/.zsh/fzf-tab
 	url = https://github.com/Aloxaf/fzf-tab
 
-[submodule "HOME/.config/nvim/pack/plugins/start/bufremove"]
-	path = HOME/.config/nvim/pack/plugins/start/bufremove
-	url = https://github.com/echasnovski/mini.bufremove
