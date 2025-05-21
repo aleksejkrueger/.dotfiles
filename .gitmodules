@@ -224,3 +224,6 @@
 	path = HOME/.zsh/fzf-tab
 	url = https://github.com/Aloxaf/fzf-tab
 
+[submodule "HOME/.config/nvim/pack/plugins/start/bufremove"]
+	path = HOME/.config/nvim/pack/plugins/start/bufremove
+	url = https://github.com/echasnovski/mini.bufremove

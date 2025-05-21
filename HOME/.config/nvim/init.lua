@@ -34,4 +34,4 @@ require "plugins.autocommands"
 require "plugins.null-ls"
 require "plugins.dap"
 require "plugins.mason"
-
+require "plugins.vimwiki"

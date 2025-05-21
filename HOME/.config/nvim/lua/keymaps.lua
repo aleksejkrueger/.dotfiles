@@ -41,6 +41,10 @@ keymap("n", "<C-l>", "<C-w>l", opts)
 -- navigate buffers
 keymap("n", "<TAB>", ":bnext<CR>", opts)
 keymap("n", "<S-TAB>", ":bprevious<CR>", opts)
+-- close buffer safely
+vim.keymap.set('n', '<leader>q', function()
+  require('mini.bufremove').delete(0, false)
+end, { desc = 'Close buffer safely' })
 
 -- move text up and down
 keymap("n", "<A-j>", "<Esc>:m .+1<CR>==gi", opts)
