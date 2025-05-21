@@ -3,6 +3,13 @@ if not status_ok then
   return
 end
 
+-- Set custom highlight
+vim.schedule(function()
+  vim.cmd [[
+    highlight GitSignsCurrentLineBlame guifg=#5a5e78 guibg=NONE
+  ]]
+end)
+
 gitsigns.setup {
   signs = {
     add = { hl = "GitSignsAdd", text = "+", numhl = "GitSignsAddNr", linehl = "GitSignsAddLn" },
@@ -11,19 +18,19 @@ gitsigns.setup {
     topdelete = { hl = "GitSignsDelete", text = "_", numhl = "GitSignsDeleteNr", linehl = "GitSignsDeleteLn" },
     changedelete = { hl = "GitSignsChange", text = "~", numhl = "GitSignsChangeNr", linehl = "GitSignsChangeLn" },
   },
-  signcolumn = true, -- Toggle with `:Gitsigns toggle_signs`
-  numhl = false, -- Toggle with `:Gitsigns toggle_numhl`
-  linehl = false, -- Toggle with `:Gitsigns toggle_linehl`
-  word_diff = false, -- Toggle with `:Gitsigns toggle_word_diff`
+  signcolumn = true,
+  numhl = false,
+  linehl = false,
+  word_diff = false,
   watch_gitdir = {
     interval = 1000,
     follow_files = true,
   },
   attach_to_untracked = true,
-  current_line_blame = true, -- Toggle with `:Gitsigns toggle_current_line_blame`
+  current_line_blame = true,
   current_line_blame_opts = {
     virt_text = true,
-    virt_text_pos = "eol", -- 'eol' | 'overlay' | 'right_align'
+    virt_text_pos = "eol",
     delay = 1000,
     ignore_whitespace = false,
   },
@@ -33,10 +40,9 @@ gitsigns.setup {
   },
   sign_priority = 6,
   update_debounce = 100,
-  status_formatter = nil, -- Use default
+  status_formatter = nil,
   max_file_length = 40000,
   preview_config = {
-    -- Options passed to nvim_open_win
     border = "rounded",
     style = "minimal",
     relative = "cursor",
@@ -47,3 +53,4 @@ gitsigns.setup {
     enable = false,
   },
 }
+
