@@ -99,14 +99,8 @@ else
     source "$HOME/.dotfiles/.venv/bin/activate"
 fi
 
-# install asdf 
-# https://asdf-vm.com/guide/getting-started.html
-# git clone https://github.com/asdf-vm/asdf.git ~/.asdf --branch v0.14.0
- 
-if [ -f "$HOME/.work/work.zsh" ]; then
-    . "$HOME/.asdf/asdf.sh"
-fi
 
+ 
 # append completions to fpath
 fpath=(${ASDF_DIR}/completions $fpath)
 
@@ -116,8 +110,11 @@ autoload -Uz compinit && compinit
 # initalize all completions on $fpath an ignore (-i) all insecure files and directory
 compinit -i
 
+
 if [ -f "$HOME/.work/work.zsh" ]; then
+
     source "$HOME/.work/work.zsh"
+
 fi
 
 # fzf

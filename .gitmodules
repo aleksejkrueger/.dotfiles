@@ -216,6 +216,10 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/bufremove"]
 	path = HOME/.config/nvim/pack/plugins/start/bufremove
 	url = https://github.com/echasnovski/mini.bufremove
+[submodule "HOME/.config/nvim/pack/plugins/start/iron.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/iron.nvim
+	url = https://github.com/Vigemus/iron.nvim.git
+
 
 [submodule "dracula-alacritty"]
 	path = HOME/.config/alacritty/alacritty
