@@ -231,3 +231,6 @@
 	path = HOME/.zsh/fzf-tab
 	url = https://github.com/Aloxaf/fzf-tab
 
+[submodule "HOME/.config/nvim/pack/plugins/start/vim-ripgrep"]
+	path = HOME/.config/nvim/pack/plugins/start/vim-ripgrep
+	url = https://github.com/jremmen/vim-ripgrep.git
