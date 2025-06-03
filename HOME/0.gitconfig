@@ -90,3 +90,5 @@ email =
 [alias]
 	unstage = restore --staged . # restore all staged files
   logs = log --oneline --all --graph # shows log with graph
+  commits = "!f() { git diff --name-only origin/$(git branch --show-current); }; f"
+

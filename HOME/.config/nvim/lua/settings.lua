@@ -113,6 +113,9 @@ vim.cmd(
 	'call nvim_create_user_command(\'Render\', \'! R -e "rmarkdown::render(\\"`realpath %`\\")" && FILE="`realpath %`" && tmux neww zathura ${FILE/rmd/pdf} && tmux last-window \', {})'
 )
 
+vim.api.nvim_create_user_command('FullPath', function()
+  print(vim.fn.expand('%:p'))
+end, {})
 
 -- jupyter notebooks in vim
 -- Enable default key mappings for nvim-ipy
