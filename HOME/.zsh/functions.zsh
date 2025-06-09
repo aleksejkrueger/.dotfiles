@@ -43,7 +43,7 @@ update(){
   fi
 }
 ######################################################################
-#git 						                                         #
+#git
 ######################################################################
 
 # quick push git
@@ -71,6 +71,9 @@ hex(){
 weather(){
     curl v2d.wttr.in/$1
 }
+
+#lazygit
+alias lg="lazygit"
 
 # open neomutt
 alias mutt="stty discard undef && neomutt"

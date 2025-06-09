@@ -234,3 +234,9 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/vim-ripgrep"]
 	path = HOME/.config/nvim/pack/plugins/start/vim-ripgrep
 	url = https://github.com/jremmen/vim-ripgrep.git
+[submodule "HOME/.tmux/plugins/tmux-continuum"]
+	path = HOME/.tmux/plugins/tmux-continuum
+	url = https://github.com/tmux-plugins/tmux-continuum
+[submodule "HOME/.tmux/plugins/tmux-resurrect"]
+	path = HOME/.tmux/plugins/tmux-resurrect
+	url = https://github.com/tmux-plugins/tmux-resurrect
