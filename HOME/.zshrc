@@ -44,6 +44,7 @@ source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kube-ps1/kube-ps1.plugin.zsh
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kubectl/kubectl.plugin.zsh
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kubectx/kubectx.plugin.zsh
 source $DOTFILES/HOME/.zsh/fzf-tab/fzf-tab.plugin.zsh
+source $DOTFILES/HOME/.zsh/fzf-git.sh/fzf-git.sh
 
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
@@ -98,8 +99,6 @@ else
     python3 -m venv "$HOME/.dotfiles/.venv/"
     source "$HOME/.dotfiles/.venv/bin/activate"
 fi
-
-
  
 # append completions to fpath
 fpath=(${ASDF_DIR}/completions $fpath)
@@ -138,8 +137,6 @@ _fzf_compgen_path() {
 _fzf_compgen_dir() {
   fd --type=d --hidden --exclude .git . "$1"
 }
-
-source $HOME/.zsh/fzf-git.sh/fzf-git.sh
 
 export FZF_CTRL_T_OPTS="--preview 'bat -n --color=always --line-range :500 {}'"
 export FZF_ALT_C_OPTS="preview 'eza --tree --color=always {} | head -200'"

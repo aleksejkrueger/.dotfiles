@@ -20,7 +20,7 @@ require("nvim-tree").setup({
   disable_netrw = true,
   hijack_netrw = true,
   filters = {
-    custom = { ".git" },
+    custom = { "^.git$", "node_modules" },
     exclude = { ".gitignore" },
   },
   update_cwd = true,
