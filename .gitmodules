@@ -243,3 +243,6 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/fzf.vim"]
 	path = HOME/.config/nvim/pack/plugins/start/fzf.vim
 	url = https://github.com/junegunn/fzf.vim
+[submodule "HOME/.config/nvim/pack/plugins/start/fzf"]
+	path = HOME/.config/nvim/pack/plugins/start/fzf
+	url = https://github.com/junegunn/fzf

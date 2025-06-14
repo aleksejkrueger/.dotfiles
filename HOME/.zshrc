@@ -19,7 +19,8 @@ export DROPBOX=$HOME/Dropbox
 export ZDOTDIR=$HOME/.zsh
 export VDOTDIR=$CONFIG/nvim
 export TDOTDIR=$HOME/.tmux
-export SUBLIME_TEXT_CONFIG_DIR=/$CONFIG/sublime-text
+# export SUBLIME_TEXT_CONFIG_DIR=/$CONFIG/sublime-text
+export NOTES=$HOME/notes/vimwiki
 
 if [[ "$os" == "osx" ]]; then
     export SUBL=$HOME/Library/Application\ Support/Sublime\ Text

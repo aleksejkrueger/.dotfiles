@@ -134,3 +134,4 @@ vim.g.jupytext_command = "jupytext"
 
 vim.g.jedi_environment_path = "$HOME/.dotfiles/.venv/bin/python3.11"  -- Python environment to use
 vim.g.jedi_auto_vimrc = 1  -- Automatically detect and use virtualenv or environment
+

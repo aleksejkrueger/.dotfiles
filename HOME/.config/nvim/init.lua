@@ -16,6 +16,7 @@ local home_dir = os.getenv("HOME")
 -- basics
 require "settings"
 require "keymaps"
+require "functions"
 local vim_work_lua_path = home_dir .. "/.work/vim.lua"
 vim.cmd("source " .. vim_work_lua_path)
 -- plugins
