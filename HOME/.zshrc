@@ -44,8 +44,10 @@ source $DOTFILES/HOME/.zsh/powerlevel10k/powerlevel10k.zsh-theme
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kube-ps1/kube-ps1.plugin.zsh
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kubectl/kubectl.plugin.zsh
 source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/kubectx/kubectx.plugin.zsh
+source $DOTFILES/HOME/.zsh/ohmyzsh/plugins/jira/jira.plugin.zsh
 source $DOTFILES/HOME/.zsh/fzf-tab/fzf-tab.plugin.zsh
 source $DOTFILES/HOME/.zsh/fzf-git.sh/fzf-git.sh
+# source $DOTFILES/HOME/.zsh/.kubectl_fzf.plugin.zsh
 
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
@@ -56,6 +58,7 @@ fi
 
 # default editor
 export EDITOR=nvim
+export VISUAL=nvim
 
 # terminal
 export TERM=screen-256color
@@ -86,6 +89,7 @@ export PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin"
 export PATH=:"$PATH:$HOME/Library/Python/3.9/bin"
 export PATH="$PATH:$HOME/.cargo/bin"
 export PATH="$PATH:$HOME/.dotfiles/.venv/bin/"
+PATH=$PATH:$GOPATH/bin
 
 export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
@@ -161,12 +165,16 @@ eval "$(zoxide init zsh)"
 # export SSL_CERT_FILE=$HOME/.certificates/all-ca-certs.crt
 # export REQUESTS_CA_BUNDLE=$HOME/.certificates/all-ca-certs.crt
 
+# kubectl completion
+# source <(kubectl completion zsh)
+
+# direnv
+eval "$(direnv hook zsh)"
+
 clear
 
 source "/opt/homebrew/opt/kube-ps1/share/kube-ps1.sh"
 PS1='$(kube_ps1)'$PS1
-
-# PROMPT='$(kube_ps1)'$PROMPT # or RPROMPT='$(kube_ps1)'
 
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"

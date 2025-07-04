@@ -5,8 +5,20 @@ end
 
 local icons = require "plugins.icons"
 
+local function on_attach(bufnr)
+  local api = require("nvim-tree.api")
 
-require("nvim-tree").setup({
+  local function opts(desc)
+    return { desc = "nvim-tree: " .. desc, buffer = bufnr, noremap = true, silent = true, nowait = true }
+  end
+
+  -- example of basic keybinds (you can customize these)
+  vim.keymap.set('n', '<CR>', api.node.open.edit, opts('Open'))
+  vim.keymap.set('n', 'o', api.node.open.edit, opts('Open'))
+  vim.keymap.set('n', 'q', api.tree.close, opts('Close'))
+end
+
+nvim_tree.setup({
   sort = {
     sorter = "case_sensitive",
   },
@@ -23,7 +35,6 @@ require("nvim-tree").setup({
     custom = { "^.git$", "node_modules" },
     exclude = { ".gitignore" },
   },
-  update_cwd = true,
   renderer = {
     add_trailing = false,
     group_empty = true,
@@ -75,7 +86,7 @@ require("nvim-tree").setup({
     },
   },
   diagnostics = {
-    enable = true,
+    enable = vim.diagnostic.is_enabled(),
     icons = {
       hint = icons.diagnostics.Hint,
       info = icons.diagnostics.Information,
@@ -85,7 +96,7 @@ require("nvim-tree").setup({
   },
   update_focused_file = {
     enable = true,
-    update_cwd = true,
+    update_root = true,
     ignore_list = {},
   },
   git = {

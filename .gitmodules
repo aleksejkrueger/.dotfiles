@@ -187,8 +187,8 @@
 	path = HOME/.config/nvim/pack/plugins/start/mason-tool-installer.nvim
   url = https://github.com/WhoIsSethDaniel/mason-tool-installer.nvim.git
 [submodule "null-ls.nvim"]
-	path = HOME/.config/nvim/pack/plugins/start/null-ls.nvim
-  url = https://github.com/jose-elias-alvarez/null-ls.nvim.git
+	path = HOME/.config/nvim/pack/plugins/start/none-ls.nvim
+  url = https://github.com/nvimtools/none-ls.nvim 
 [submodule "nvim-dap"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-dap
   url = https://github.com/mfussenegger/nvim-dap.git
@@ -246,3 +246,6 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/fzf"]
 	path = HOME/.config/nvim/pack/plugins/start/fzf
 	url = https://github.com/junegunn/fzf
+[submodule "none-ls.nvim"]
+	path = none-ls.nvim
+	url = https://github.com/nvimtools/none-ls.nvim

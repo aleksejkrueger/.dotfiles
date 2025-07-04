@@ -6,12 +6,12 @@ command_exists() {
     type "$command" >/dev/null 2>&1
 }
 
-function cd() {
-    builtin cd "$@" || return
-    if [ -f ".venv/bin/activate" ]; then
-        source .venv/bin/activate
-    fi
-}
+# function cd() {
+#     builtin cd "$@" || return
+#     if [ -f ".venv/bin/activate" ]; then
+#         source .venv/bin/activate
+#     fi
+# }
 
 ######################################################################
 # aliasas						                                     #
@@ -229,6 +229,14 @@ keychron(){
 logi(){
   blueutil -p 1 && blueutil --connect $(pass bluetooth/zonevibe100)
 }
+
+search() {
+  [[ -z "$1" ]] && echo "Usage: s <term>" && return 1
+  grep -rniw --exclude-dir=".git" . -e "$1"
+  echo "\n---\ndistinct files"
+  grep -rlw --exclude-dir=".git" . -e "$1"
+}
+
 ######################################################################
 fi
 

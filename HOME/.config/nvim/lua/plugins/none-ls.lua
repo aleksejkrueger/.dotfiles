@@ -1,11 +1,11 @@
 local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
-local null_ls = require('null-ls')
+local null_ls = require("null-ls")
 
-local opts = {
+null_ls.setup({
     sources = {
         null_ls.builtins.formatting.black,
-        null_ls.builtins.diagnostics.mypy,  -- Use `mypy` for diagnostics
-        null_ls.builtins.diagnostics.ruff,  -- Assuming `ruff` is a diagnostic tool
+        null_ls.builtins.diagnostics.mypy,
+        null_ls.builtins.diagnostics.ruff,
     },
     on_attach = function(client, bufnr)
         if client.supports_method("textDocument/formatting") then
@@ -22,6 +22,4 @@ local opts = {
             })
         end
     end,
-}
-
-null_ls.setup(opts)
+})
