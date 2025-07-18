@@ -109,6 +109,27 @@ disconnect(){
     umount /Volumes/vpvs
 }
 
+# count function
+count() {
+  case "$1" in
+    files)
+      find . -maxdepth 1 -type f | wc -l
+      ;;
+    dirs)
+      find . -maxdepth 1 -type d ! -name '.' | wc -l
+      ;;
+    files-recursive)
+      find . -type f | wc -l
+      ;;
+    dirs-recursive)
+      find . -type d | wc -l
+      ;;
+    *)
+      echo "Usage: count {files|dirs|files-recursive|dirs-recursive}"
+      ;;
+  esac
+}
+
 #####################################################
 # zsh functions mac                                 #
 #####################################################

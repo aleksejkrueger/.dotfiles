@@ -70,6 +70,13 @@ vim.o.swapfile = false -- do not use swap file
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
 
+vim.keymap.set('n', 'd', '"_d', { noremap = true })
+vim.keymap.set('n', 'D', '"_D', { noremap = true })
+vim.keymap.set('n', 'c', '"_c', { noremap = true })
+vim.keymap.set('n', 'C', '"_C', { noremap = true })
+vim.keymap.set('v', 'd', '"_d', { noremap = true })
+vim.keymap.set('v', 'c', '"_c', { noremap = true })
+
 vim.cmd([[
  au FileType python set ts=4 sw=4
  au BufRead,BufNewFile *.md set ft=mkd tw=80 syntax=markdown

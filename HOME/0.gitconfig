@@ -91,4 +91,7 @@ email =
 	unstage = restore --staged . # restore all staged files
   logs = log --oneline --all --graph # shows log with graph
   commits = "!f() { git diff --name-only origin/$(git branch --show-current); }; f"
-
+  s = status
+  feat = "!f() { git commit -am \"feat($1): $2\"; }; f"
+  pushup = "!git push --set-upstream origin $(git rev-parse --abbrev-ref HEAD)"
+  pmr = "!glab mr create --fill"
