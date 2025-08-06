@@ -11,7 +11,7 @@
 #     \/__/         \/__/         \/__/
 
 [user]
-name = 
+name = Vorname Name
 email =
   ; signingkey = B50CCA3A30B61127
 [credential]
@@ -94,4 +94,22 @@ email =
   s = status
   feat = "!f() { git commit -am \"feat($1): $2\"; }; f"
   pushup = "!git push --set-upstream origin $(git rev-parse --abbrev-ref HEAD)"
-  pmr = "!glab mr create --fill"
+  pmr = "!f() { \
+    description=\"$1\"; \
+    shift 2; \
+    output=$(git push \
+      -o merge_request.create \
+      -o merge_request.assign='@vorname.name' \
+      -o merge_request.description=\"$description\" \
+      \"$@\" 2>&1); \
+    echo \"$output\"; \
+    url=$(echo \"$output\" | grep -Eo 'https?://[^ ]*merge_requests[^ ]*' | head -n1); \
+    if [ -n \"$url\" ]; then \
+      echo \"Opening merge request URL: $url\"; \
+      open \"$url\"; \
+    else \
+      echo \"Merge request URL not found.\" >&2; \
+      exit 1; \
+    fi; \
+  }; f"
+

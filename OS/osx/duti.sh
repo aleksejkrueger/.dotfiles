@@ -49,18 +49,18 @@ duti -s org.libreoffice.script .xlsx all
 duti -s org.libreoffice.script .xls all
 
 # qview
-duti -s com.interversehq.qView .jpg all
-duti -s com.interversehq.qView .jpeg all
-duti -s com.interversehq.qView .png all
-duti -s com.interversehq.qView .gif all
-duti -s com.interversehq.qView .bmp all
-duti -s com.interversehq.qView .ppm all
-duti -s com.interversehq.qView .pgm all
-duti -s com.interversehq.qView .pnm all
-duti -s com.interversehq.qView .heif all
-duti -s com.interversehq.qView .avif all
-duti -s com.interversehq.qView .icns all
-duti -s com.interversehq.qView .svg all
+duti -s com.brave.Browser .jpg all
+duti -s com.brave.Browser .jpeg all
+duti -s com.brave.Browser .png all
+duti -s com.brave.Browser .gif all
+duti -s com.brave.Browser .bmp all
+duti -s com.brave.Browser .ppm all
+duti -s com.brave.Browser .pgm all
+duti -s com.brave.Browser .pnm all
+duti -s com.brave.Browser .heif all
+duti -s com.brave.Browser .avif all
+duti -s com.brave.Browser .icns all
+duti -s com.brave.Browser .svg all
 
 # preview
 duti -s com.apple.Preview .stl all
