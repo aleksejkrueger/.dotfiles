@@ -38,13 +38,13 @@ fi
 ## clone `.dotfiles`
 
 ```
-git clone --recurse-submodules https://github.com/alexchaichan/.dotfiles.git
+git clone --recurse-submodules https://github.com/aleksejkrueger/.dotfiles.git
 cd ~/.dotfiles
 git submodule update --init --recursive
 git pull --recurse-submodules
 ```
 
-## store [`.password-store`](https://github.com/alexchaichan/.password-store/archive/refs/heads/main.zip) into `~/`
+## store [`.password-store`](https://github.com/aleksejkrueger/.password-store/archive/refs/heads/main.zip) into `~/`
 
 `mv ~/Downloads/password-store-main/.password-store-main/ ~/.password-store/`
 

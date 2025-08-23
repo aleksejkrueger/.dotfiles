@@ -83,9 +83,9 @@ asdf:
 
 .PHONY: repos
 repos:
-	git clone https://github.com/alexchaichan/data-science.git $(HOME)/data-science; \
-	git clone https://github.com/alexchaichan/cheatsheets.git $(HOME)/cheatsheets; \
-	git clone https://github.com/alexchaichan/Templates.git $(HOME)/Templates; \
+	git clone https://github.com/aleksejkrueger/data-science.git $(HOME)/data-science; \
+	git clone https://github.com/aleksejkrueger/cheatsheets.git $(HOME)/cheatsheets; \
+	git clone https://github.com/aleksejkrueger/Templates.git $(HOME)/Templates; \
 	git clone https://github.com/pandoc/lua-filters.git $(HOME)/.local/share/pandoc/filters;
 
 .PHONY: passwords

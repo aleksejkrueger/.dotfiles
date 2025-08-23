@@ -46,6 +46,21 @@ vim.keymap.set('n', '<leader>q', function()
   require('mini.bufremove').delete(0, false)
 end, { desc = 'Close buffer safely' })
 
+vim.keymap.set('n', '<leader>Q', function()
+  -- close buffer safely
+  require('mini.bufremove').delete(0, false)
+
+  local api = require("nvim-tree.api")
+
+  if not api.tree.is_visible() then
+    -- if tree is not open → open it
+    api.tree.open()
+  else
+    -- if tree is open → move to it
+    vim.cmd("wincmd h")
+  end
+end, { desc = 'Close buffer safely and go to/open NvimTree' })
+
 -- move text up and down
 keymap("n", "<A-j>", "<Esc>:m .+1<CR>==gi", opts)
 keymap("n", "<A-k>", "<Esc>:m .-2<CR>==gi", opts)
