@@ -142,3 +142,72 @@ vim.g.jupytext_command = "jupytext"
 vim.g.jedi_environment_path = "$HOME/.dotfiles/.venv/bin/python3.11"  -- Python environment to use
 vim.g.jedi_auto_vimrc = 1  -- Automatically detect and use virtualenv or environment
 
+vim.api.nvim_create_autocmd({"BufRead", "BufNewFile"}, {
+  pattern = "*.pgn",
+  command = "setfiletype pgn",
+})
+
+
+vim.api.nvim_create_user_command("Rshift", function(opts)
+  local args = vim.split(opts.args, " ")
+  local project = args[1]
+  local stage = args[2]
+  local env = args[3] or "consumer"
+
+  if not project or not stage then
+    vim.notify("Usage: :SendTo <project> <stage> [env]", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Get visual selection
+  local start_pos = vim.fn.getpos("'<")[2]
+  local end_pos = vim.fn.getpos("'>")[2]
+  local query = table.concat(vim.fn.getline(start_pos, end_pos), "\n")
+  query = query:gsub('"', '\\"'):gsub("\n", " ")
+
+  -- Create temp file
+  local tmp_output = vim.fn.tempname() .. ".sqlout"
+
+  -- Run the script
+  local cmd = string.format("~/r_/runner.sh %s %s %s \"%s\" > %s", project, stage, env, query, tmp_output)
+  os.execute(cmd)
+
+  -- Open output
+  vim.cmd("edit " .. tmp_output)
+end, {
+  nargs = "+",
+  range = true,
+  desc = "Send query to dynamic DB script",
+})
+
+-- Function to insert a collapsible Markdown template
+local function insert_collapse_template()
+  local lines = {
+    "<details>",
+    "<summary></summary>",
+    "",
+    "",
+    "",
+    "</details>"
+  }
+
+  -- Insert lines at the cursor
+  vim.api.nvim_put(lines, "l", true, true)
+
+  -- Move cursor to the line with "Your content here..."
+  local row, _ = unpack(vim.api.nvim_win_get_cursor(0))
+  vim.api.nvim_win_set_cursor(0, { row - 3, 0 })
+end
+
+-- Only activate in Markdown files
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "mkd",
+  callback = function()
+    vim.api.nvim_create_user_command(
+      "CollapseTemplate",
+      insert_collapse_template,
+      { desc = "Insert a collapsible template in Markdown" }
+    )
+  end,
+})
+

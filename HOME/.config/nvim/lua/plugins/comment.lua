@@ -71,3 +71,4 @@ local ft = require('Comment.ft')
 -- set right comment for .Rmd & .md
 ft.set('mkd', '<!--%s-->')
 ft.set('rmd', '<!--%s-->')
+ft.set('vimwiki', '<!--%s-->')

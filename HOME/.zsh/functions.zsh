@@ -74,6 +74,7 @@ weather(){
 
 #lazygit
 alias lg="lazygit"
+alias lq="lazysql"
 
 # open neomutt
 alias mutt="stty discard undef && neomutt"

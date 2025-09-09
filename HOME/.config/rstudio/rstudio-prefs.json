@@ -4,7 +4,6 @@
     "posix_terminal_shell": "zsh",
     "jobs_tab_visibility": "shown",
     "show_margin": false,
-    "default_project_location": "",
     "soft_wrap_r_files": true,
     "cran_mirror": {
         "name": "Global (CDN)",
