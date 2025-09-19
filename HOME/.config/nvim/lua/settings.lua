@@ -211,3 +211,7 @@ vim.api.nvim_create_autocmd("FileType", {
   end,
 })
 
+
+vim.g.copilot_enterprise_url = 'https://dkbag.ghe.com'
+vim.g.copilot_auth_provider_url = 'https://dkbag.ghe.com'
+
