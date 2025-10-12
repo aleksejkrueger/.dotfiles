@@ -228,6 +228,12 @@
 [submodule "HOME/.zsh/fzf-tab"]
 	path = HOME/.zsh/fzf-tab
 	url = https://github.com/Aloxaf/fzf-tab
+[submodule "HOME/.config/nvim/pack/plugins/start/CopilotChat.vim"]
+	path = HOME/.config/nvim/pack/plugins/start/CopilotChat.vim
+	url = https://github.com/aleksejkrueger/CopilotChat.nvim
+[submodule "HOME/.config/nvim/pack/plugins/start/copilot.vim"]
+	path = HOME/.config/nvim/pack/plugins/start/copilot.vim
+	url = https://github.com/github/copilot.vim.git
 
 [submodule "HOME/.config/nvim/pack/plugins/start/vim-ripgrep"]
 	path = HOME/.config/nvim/pack/plugins/start/vim-ripgrep
