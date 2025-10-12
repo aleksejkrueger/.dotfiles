@@ -174,9 +174,6 @@
 [submodule "nvim-ipy"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-ipy
   url = https://github.com/bfredl/nvim-ipy.git
-[submodule "mason.nvim"]
-	path = HOME/.config/nvim/pack/plugins/start/mason.nvim
-  url = https://github.com/williamboman/mason.nvim.git
 [submodule "mason-lspconfig.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/mason-lspconfig.nvim
   url = https://github.com/williamboman/mason-lspconfig.nvim.git
@@ -252,3 +249,6 @@
 [submodule "none-ls.nvim"]
 	path = none-ls.nvim
 	url = https://github.com/nvimtools/none-ls.nvim
+[submodule "HOME/.config/nvim/pack/plugins/start/mason.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/mason.nvim
+	url = https://github.com/mason-org/mason.nvim.git
