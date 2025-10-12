@@ -29,6 +29,9 @@
 [submodule "fzf-tab"]
 	path = HOME/.zsh/fzf-tab
 	url = https://github.com/Aloxaf/fzf-tab
+[submodule "HOME/.zsh/fzf-tab"]
+	path = HOME/.zsh/fzf-tab
+	url = https://github.com/Aloxaf/fzf-tab
 
 # tmux
 [submodule "tmux-battery"]
@@ -88,6 +91,14 @@
 [submodule "HOME/.tmux/plugins/tmux-resurrect"]
 	path = HOME/.tmux/plugins/tmux-resurrect
 	url = https://github.com/tmux-plugins/tmux-resurrect
+
+# other
+[submodule "dracula-alacritty"]
+	path = HOME/.config/alacritty/alacritty
+	url = https://github.com/dracula/alacritty.git
+[submodule "dracula"]
+	path = HOME/.config/qutebrowser/dracula
+	url = https://github.com/dracula/qutebrowser-dracula-theme.git
 
 # vim
 [submodule "bufferline.nvim"]
@@ -213,21 +224,9 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/iron.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/iron.nvim
 	url = https://github.com/Vigemus/iron.nvim.git
-[submodule "dracula-alacritty"]
-	path = HOME/.config/alacritty/alacritty
-	url = https://github.com/dracula/alacritty.git
-[submodule "dracula"]
-	path = HOME/.config/qutebrowser/dracula
-	url = https://github.com/dracula/qutebrowser-dracula-theme.git
-[submodule "HOME/.zsh/fzf-tab"]
-	path = HOME/.zsh/fzf-tab
-	url = https://github.com/Aloxaf/fzf-tab
 [submodule "HOME/.config/nvim/pack/plugins/start/CopilotChat.vim"]
 	path = HOME/.config/nvim/pack/plugins/start/CopilotChat.vim
 	url = https://github.com/aleksejkrueger/CopilotChat.nvim
-[submodule "HOME/.config/nvim/pack/plugins/start/copilot.vim"]
-	path = HOME/.config/nvim/pack/plugins/start/copilot.vim
-	url = https://github.com/github/copilot.vim.git
 [submodule "HOME/.config/nvim/pack/plugins/start/vim-ripgrep"]
 	path = HOME/.config/nvim/pack/plugins/start/vim-ripgrep
 	url = https://github.com/jremmen/vim-ripgrep.git
@@ -238,8 +237,26 @@
 	path = HOME/.config/nvim/pack/plugins/start/fzf
 	url = https://github.com/junegunn/fzf
 [submodule "none-ls.nvim"]
-	path = none-ls.nvim
+	path =  HOME/.config/nvim/pack/plugins/start/none-ls.nvim
 	url = https://github.com/nvimtools/none-ls.nvim
 [submodule "HOME/.config/nvim/pack/plugins/start/mason.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/mason.nvim
 	url = https://github.com/mason-org/mason.nvim.git
+[submodule "HOME/.config/nvim/pack/plugins/start/copilot-cmp"]
+	path = HOME/.config/nvim/pack/plugins/start/copilot-cmp
+	url = https://github.com/zbirenbaum/copilot-cmp.git
+[submodule "HOME/.config/nvim/pack/plugins/start/cmp-nvim-lsp"]
+	path = HOME/.config/nvim/pack/plugins/start/cmp-nvim-lsp
+	url = https://github.com/hrsh7th/cmp-nvim-lsp.git
+[submodule "HOME/.config/nvim/pack/plugins/start/cmp_luasnip"]
+	path = HOME/.config/nvim/pack/plugins/start/cmp_luasnip
+	url = https://github.com/saadparwaiz1/cmp_luasnip.git
+[submodule "HOME/.config/nvim/pack/plugins/start/LuaSnip"]
+	path = HOME/.config/nvim/pack/plugins/start/LuaSnip
+	url = https://github.com/L3MON4D3/LuaSnip.git
+[submodule "HOME/.config/nvim/pack/plugins/start/friendly-snippets"]
+	path = HOME/.config/nvim/pack/plugins/start/friendly-snippets
+	url = https://github.com/rafamadriz/friendly-snippets.git
+[submodule "HOME/.config/nvim/pack/plugins/start/copilot.lua"]
+	path = HOME/.config/nvim/pack/plugins/start/copilot.lua
+	url = https://github.com/zbirenbaum/copilot.lua.git

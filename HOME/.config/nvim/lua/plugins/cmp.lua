@@ -8,6 +8,13 @@ if not snip_status_ok then
   return
 end
 
+vim.opt.completeopt = { "menu", "menuone", "noselect" }
+
+local capabilities = require("cmp_nvim_lsp").default_capabilities()
+require("lspconfig").pyright.setup {
+  capabilities = capabilities,
+}
+
 require("luasnip.loaders.from_snipmate").lazy_load()
 require("luasnip.loaders.from_vscode").lazy_load()
 
@@ -103,12 +110,14 @@ cmp.setup {
     { name = "luasnip" },
     { name = "buffer" },
     { name = "path" },
+    { name = "copilot", group_index = 2 },
   },
   confirm_opts = {
     behavior = cmp.ConfirmBehavior.Replace,
     select = false,
   },
   window = {
+    completion = cmp.config.window.bordered(),
     documentation = cmp.config.window.bordered(),
   },
   experimental = {
