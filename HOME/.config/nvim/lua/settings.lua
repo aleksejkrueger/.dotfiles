@@ -211,7 +211,37 @@ vim.api.nvim_create_autocmd("FileType", {
   end,
 })
 
+-- function to insert a collapsible markdown template with date
+local function insert_collapse_template_with_date()
+  local date = os.date("%Y-%m-%d")
+  local lines = {
+    "<details>",
+    "<summary>" .. date .. "</summary>",
+    "",
+    "",
+    "",
+    "</details>"
+  }
 
-vim.g.copilot_enterprise_url = 'https://dkbag.ghe.com'
-vim.g.copilot_auth_provider_url = 'https://dkbag.ghe.com'
+  -- insert lines at the cursor
+  vim.api.nvim_put(lines, "l", true, true)
+
+  -- move cursor to the first empty line inside the block
+  local row, _ = unpack(vim.api.nvim_win_get_cursor(0))
+  vim.api.nvim_win_set_cursor(0, { row - 3, 0 })
+end
+
+-- only activate in markdown files
+vim.api.nvim_create_autocmd("filetype", {
+  pattern = "mkd",
+  callback = function()
+    vim.api.nvim_create_user_command(
+      "CollapseTemplateDate",
+      insert_collapse_template_with_date,
+      { desc = "insert a collapsible template in markdown with date" }
+    )
+  end,
+})
+
+
 
