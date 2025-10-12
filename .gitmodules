@@ -132,9 +132,6 @@
 [submodule "nvim-web-devicons"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-web-devicons
 	url = https://github.com/kyazdani42/nvim-web-devicons.git
-[submodule "nvim-yarp"]
-	path = HOME/.config/nvim/pack/plugins/start/nvim-yarp
-	url = https://github.com/roxma/nvim-yarp.git
 [submodule "plenary.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/plenary.nvim
 	url = https://github.com/nvim-lua/plenary.nvim.git
@@ -162,9 +159,6 @@
 [submodule "nvim-cmp"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-cmp
   url = https://github.com/hrsh7th/nvim-cmp.git
-[submodule "lsp-inlayhints.nvim"]
-	path = HOME/.config/nvim/pack/plugins/start/lsp-inlayhints.nvim
-  url = https://github.com/lvimuser/lsp-inlayhints.nvim.git
 [submodule "jupytext.vim"]
 	path = HOME/.config/nvim/pack/plugins/start/jupytext.vim
   url = https://github.com/goerz/jupytext.vim.git
@@ -177,9 +171,6 @@
 [submodule "mason-lspconfig.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/mason-lspconfig.nvim
   url = https://github.com/williamboman/mason-lspconfig.nvim.git
-[submodule "jedi-vim"]
-	path = HOME/.config/nvim/pack/plugins/start/jedi-vim
-  url = https://github.com/davidhalter/jedi-vim.git
 [submodule "nvim-lspconfig"]
 	path = HOME/.config/nvim/pack/plugins/start/nvim-lspconfig
   url = https://github.com/neovim/nvim-lspconfig.git
