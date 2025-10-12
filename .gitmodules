@@ -219,9 +219,6 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/iron.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/iron.nvim
 	url = https://github.com/Vigemus/iron.nvim.git
-[submodule "HOME/.config/nvim/pack/github/start/copilot.vim"]
-	path = HOME/.config/nvim/pack/github/start/copilot.vim
-	url = https://github.com/aleksejkrueger/CopilotChat.nvim.git
 [submodule "HOME/.config/nvim/pack/plugins/start/CopilotChat.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/CopilotChat.nvim
 	url = https://github.com/simchri/CopilotChat.nvim.git 
