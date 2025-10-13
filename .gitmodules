@@ -278,3 +278,6 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/nui.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/nui.nvim
 	url = https://github.com/MunifTanjim/nui.nvim.git
+[submodule "HOME/.config/nvim/pack/plugins/start/avante.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/avante.nvim
+	url = https://github.com/yetone/avante.nvim.git
