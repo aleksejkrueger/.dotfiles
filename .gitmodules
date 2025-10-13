@@ -260,3 +260,12 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/copilot.lua"]
 	path = HOME/.config/nvim/pack/plugins/start/copilot.lua
 	url = https://github.com/zbirenbaum/copilot.lua.git
+[submodule "HOME/.config/nvim/pack/plugins/start/lspkind.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/lspkind.nvim
+	url = https://github.com/onsails/lspkind.nvim
+[submodule "HOME/.config/nvim/pack/plugins/start/copilot-lsp"]
+	path = HOME/.config/nvim/pack/plugins/start/copilot-lsp
+	url = https://github.com/copilotlsp-nvim/copilot-lsp.git
+[submodule "HOME/.config/nvim/pack/plugins/start/lsp_signature.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/lsp_signature.nvim
+	url = https://github.com/ray-x/lsp_signature.nvim.git
