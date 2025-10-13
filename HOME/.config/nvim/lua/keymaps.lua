@@ -98,9 +98,7 @@ keymap("v", "{", "l:s/\\%V\\(.*\\)\\%V/{\\1}/<CR>", opts)
 -- keymap("t", "<C-l>", "<C-\\><C-N><C-w>l", term_opts)
 
 -- alternate way to save
-keymap("", "<C-s>", "<Nop>", opts) -- unmap first
 -- save with ctr+w aswell
-keymap("", "<C-s>", ":w<CR>", opts)
 -- alternate way to quit
 keymap("", "<C-q>", "<Nop>", opts) -- unmap first
 keymap("", "<C-q>", ":q!<CR>", opts) -- quit with ctrl+q

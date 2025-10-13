@@ -269,3 +269,15 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/lsp_signature.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/lsp_signature.nvim
 	url = https://github.com/ray-x/lsp_signature.nvim.git
+[submodule "HOME/.config/nvim/pack/plugins/start/img-clip.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/img-clip.nvim
+	url = https://github.com/hakonharnes/img-clip.nvim.git
+[submodule "HOME/.config/nvim/pack/plugins/start/render-markdown.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/render-markdown.nvim
+	url = https://github.com/MeanderingProgrammer/render-markdown.nvim.git
+[submodule "HOME/.config/nvim/pack/plugins/start/avante.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/avante.nvim
+	url = https://github.com/yetone/avante.nvim.git
+[submodule "HOME/.config/nvim/pack/plugins/start/nui.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/nui.nvim
+	url = https://github.com/MunifTanjim/nui.nvim.git

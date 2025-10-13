@@ -20,6 +20,7 @@ require "functions"
 local vim_work_lua_path = home_dir .. "/.work/vim.lua"
 vim.cmd("source " .. vim_work_lua_path)
 -- plugins
+require("plugins.avante")
 require "plugins.cmp"
 require "plugins.telescope"
 require "plugins.autopairs"

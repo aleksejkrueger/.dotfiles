@@ -20,6 +20,11 @@ end
 
 require("copilot_cmp").setup()
 
+require('copilot-lsp').setup({
+  nes = {
+    move_count_threshold = 3,   -- Clear after 3 cursor movements
+  }
+})
 
 require('copilot').setup({
   panel = {
@@ -52,7 +57,7 @@ require('copilot').setup({
       dismiss = "<C-]>",
     },
   },
-  nls = { 
+  nes = { 
     enabled = true, -- requires copilot-lsp as a dependency
     auto_trigger = true,
     keymap = {
