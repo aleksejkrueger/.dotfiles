@@ -21,18 +21,25 @@ require('avante').setup({
     -- },
 
     behaviour = {
-      auto_suggestions = false,
-      auto_set_highlight_group = true,
-      enable_fastapply = false,
-      auto_set_keymaps = true,
-      auto_apply_diff_after_generation = false,
-      support_paste_from_clipboard = false,
-      minimize_diff = true,
-      enable_token_counting = true,
-      auto_add_current_file = true,
-      auto_approve_tool_permissions = false,
+    auto_focus_sidebar = true,
+    auto_suggestions = false, -- Experimental stage
+    auto_suggestions_respect_ignore = true,
+    auto_set_highlight_group = true,
+    auto_set_keymaps = true,
+    auto_apply_diff_after_generation = true,
+    jump_result_buffer_on_finish = false,
+    support_paste_from_clipboard = false,
+    minimize_diff = true,
+    enable_token_counting = true,
+    use_cwd_as_project_root = false,
+    auto_focus_on_diff_view = false,
+    ---@type boolean | string[] -- true: auto-approve all tools, false: normal prompts, string[]: auto-approve specific tools by name
+    auto_approve_tool_permissions = false, -- Default: auto-approve all tools (no prompts)
+    auto_check_diagnostics = true,
+    enable_fastapply = false,
+    include_generated_by_commit_line = false, -- Controls if 'Generated-by: <provider/model>' line is added to git commit message
+    auto_add_current_file = true, -- Whether to automatically add the current file when opening a new chat},
     },
-
     prompt_logger = {
       enabled = true,
       log_dir = vim.fn.stdpath("cache") .. "/avante_prompts",
