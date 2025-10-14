@@ -94,12 +94,13 @@ email =
   s = status
   feat = "!f() { git commit -am \"feat($1): $2\"; }; f"
   pushup = "!git push --set-upstream origin $(git rev-parse --abbrev-ref HEAD)"
+
   pmr = "!f() { \
     description=\"$1\"; \
     shift 2; \
     output=$(git push \
       -o merge_request.create \
-      -o merge_request.assign='@vorname.name' \
+      -o merge_request.assign='@vorname.nachname' \
       -o merge_request.description=\"$description\" \
       \"$@\" 2>&1); \
     echo \"$output\"; \
@@ -111,5 +112,6 @@ email =
       echo \"Merge request URL not found.\" >&2; \
       exit 1; \
     fi; \
+    git switch master; \
+    git pull; \
   }; f"
-
