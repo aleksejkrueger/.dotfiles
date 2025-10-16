@@ -1,10 +1,8 @@
-
 require('render-markdown').setup({
-  filte_types = { 'markdown', 'Avante' },
+  file_types = { 'markdown', 'Avante' },
 })
 
 require('avante').setup({
-  opts = {
     ---@alias Provider "copilot"
     ---@type Provider
     provider = "copilot",
@@ -12,7 +10,17 @@ require('avante').setup({
     ---@alias Mode "agentic" | "legacy"
     ---@type Mode
     mode = "legacy",
-
+    auto_suggestions_provider = "copilot",
+    providers = {
+      copilot = {
+        endpoint = "https://dkbag.ghe.com",
+        model = "gpt-4o-2024-11-20",
+        extra_request_body = {
+          temperature = 0.75,
+          max_tokens = 4096,
+        },
+      },
+    },
     -- dual_boost = {
     --   enabled = false,
     --   first_provider = "copilot",
@@ -21,6 +29,7 @@ require('avante').setup({
     -- },
 
     behaviour = {
+    auto_approve_tool_permissions = false,
     auto_focus_sidebar = true,
     auto_suggestions = false, -- Experimental stage
     auto_suggestions_respect_ignore = true,
@@ -33,12 +42,6 @@ require('avante').setup({
     enable_token_counting = true,
     use_cwd_as_project_root = false,
     auto_focus_on_diff_view = false,
-    ---@type boolean | string[] -- true: auto-approve all tools, false: normal prompts, string[]: auto-approve specific tools by name
-    auto_approve_tool_permissions = false, -- Default: auto-approve all tools (no prompts)
-    auto_check_diagnostics = true,
-    enable_fastapply = false,
-    include_generated_by_commit_line = false, -- Controls if 'Generated-by: <provider/model>' line is added to git commit message
-    auto_add_current_file = true, -- Whether to automatically add the current file when opening a new chat},
     },
     prompt_logger = {
       enabled = true,
@@ -148,6 +151,5 @@ require('avante').setup({
       debounce = 600,
       throttle = 600,
     },
-  },
 })
 

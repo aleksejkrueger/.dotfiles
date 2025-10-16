@@ -15,9 +15,16 @@ lualine.setup {
   },
   sections = {
     lualine_a = {'mode'},
-    lualine_b = {'branch', 'diff', 'diagnostics'},
+    lualine_b = {{'branch', icon = ''}, 'diff', 'diagnostics'},
     lualine_c = {'filename'},
-    lualine_x = {'encoding', 'fileformat', 'filetype'},
+    lualine_x = {
+      'encoding',
+      'fileformat',
+      'filetype',
+      { 'filesize', icon = '' },  -- Adds file size
+      { 'gitsigns.head', icon = '' },  -- Enhanced Git branch from gitsigns.nvim
+      { 'gitsigns.status', icon = '' }, -- Git diff stats using gitsigns.nvim
+    },
     lualine_y = {'progress'},
     lualine_z = {'location'}
   },

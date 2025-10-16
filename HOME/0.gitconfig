@@ -92,9 +92,14 @@ email =
   logs = log --oneline --all --graph # shows log with graph
   commits = "!f() { git diff --name-only origin/$(git branch --show-current); }; f"
   s = status
-  feat = "!f() { git commit -am \"feat($1): $2\"; }; f"
-  pushup = "!git push --set-upstream origin $(git rev-parse --abbrev-ref HEAD)"
-
+  c = "!f() { \
+    git pull; \
+    if git rev-parse --verify \"$1\" >/dev/null 2>&1; then \
+      git checkout \"$1\"; \
+    else \
+      git checkout -b \"$1\"; \
+    fi; \
+  }; f"
   pmr = "!f() { \
     description=\"$1\"; \
     shift 2; \
