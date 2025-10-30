@@ -180,3 +180,25 @@ end, {
   desc = "Send query to dynamic DB script",
 })
 
+-- search for multiple tags with :Rg. order doesnt matter
+vim.api.nvim_create_user_command('Rgtags', function(opts)
+  if #opts.fargs == 0 then
+    print("usage: :Rgtags tag1 tag2 ...")
+    return
+  end
+
+  -- build regex
+  local regex = ":"
+  for _, tag in ipairs(opts.fargs) do
+    regex = regex .. "(?=.*" .. tag .. ")"
+  end
+  regex = regex .. ".*:"
+
+  -- wrap regex in single quotes for shell
+  local cmd = "Rg --pcre2 '" .. regex .. "'"
+  -- execute the command
+  vim.cmd(cmd)
+end, { nargs = '+' })
+
+-- example usage :Rg tag1 tag2 
+
