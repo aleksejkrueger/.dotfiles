@@ -187,17 +187,28 @@ vim.api.nvim_create_user_command('Rgtags', function(opts)
     return
   end
 
-  -- build regex
-  local regex = ":"
-  for _, tag in ipairs(opts.fargs) do
-    regex = regex .. "(?=.*" .. tag .. ")"
-  end
-  regex = regex .. ".*:"
+  -- start with first tag regex
+  local first_tag = opts.fargs[1]
+  local regex = ":" .. "[^:]*" .. first_tag .. "[^:]*:"
 
-  -- wrap regex in single quotes for shell
-  local cmd = "Rg --pcre2 '" .. regex .. "'"
-  -- execute the command
-  vim.cmd(cmd)
+  -- execute first search
+  local results = vim.fn.systemlist("rg '" .. regex .. "'")
+
+  -- filter results for remaining tags
+  for i = 2, #opts.fargs do
+    local tag = opts.fargs[i]
+    local filtered = {}
+    for _, line in ipairs(results) do
+      if string.match(line, ":" .. "[^:]*" .. tag .. "[^:]*:") then
+        table.insert(filtered, line)
+      end
+    end
+    results = filtered
+  end
+
+  -- show results in quickfix
+  vim.fn.setqflist({}, ' ', {title = 'Rgtags', lines = results})
+  vim.cmd('copen')
 end, { nargs = '+' })
 
 -- example usage :Rg tag1 tag2 
