@@ -18,6 +18,7 @@ local function on_attach(bufnr)
   vim.keymap.set('n', 'q', api.tree.close, opts('Close'))
   vim.keymap.set('n', 'a', api.fs.create, opts('Create'))
   vim.keymap.set('n', 'd', api.fs.remove, opts('Delete'))
+  vim.keymap.set('n', 'r', api.fs.rename, opts('Rename'))
 end
 
 nvim_tree.setup({
