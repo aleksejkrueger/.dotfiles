@@ -1,54 +1,62 @@
---- Scans the current buffer for potential file paths and Python module names.
---- 
---- Extracts file-like tokens and Python-style module references (e.g., `a.b.c` → `a/b/c.py`).
---- Validates whether each resolved path exists, de-duplicates the results, and shows
---- them in an FZF picker with `bat` preview. Selecting an entry opens the file in the editor.
----
---- Useful for quickly jumping to files referenced in code, logs, or documentation.
----
---- Note: You must run this command from the project root directory for correct path resolution.
---- Paths are resolved relative to the current working directory.
-vim.api.nvim_create_user_command("Paths", function()
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local paths = {}
-  local seen = {}
+vim.api.nvim_create_user_command("Rshift", function(opts)
+  local args = vim.split(opts.args, " ")
+  local project = args[1]
+  local stage = args[2]
+  local env = args[3] or "consumer"
 
-  local function add_if_valid(path)
-    local expanded = vim.fn.expand(path)
-    if vim.fn.filereadable(expanded) == 1 then
-      local relpath = vim.fn.fnamemodify(expanded, ":.")
-      if not seen[relpath] then
-        table.insert(paths, relpath)
-        seen[relpath] = true
-      end
-    end
-  end
-
-  for _, line in ipairs(lines) do
-    -- Detect file-like tokens
-    for token in line:gmatch("[^%s%p]*[/%w%.%_%-%~%$]+[^%s%p]*") do
-      add_if_valid(token)
-    end
-
-    -- Python module style: a.b.c → a/b/c.py
-    for mod in line:gmatch("([%w_]+[%w_%.]+)") do
-      if mod:find("%.") then
-        local py_path = mod:gsub("%.", "/") .. ".py"
-        add_if_valid(py_path)
-      end
-    end
-  end
-
-  if #paths == 0 then
-    print("No valid paths or module files found.")
+  if not project or not stage then
+    vim.notify("Usage: :SendTo <project> <stage> [env]", vim.log.levels.ERROR)
     return
   end
 
-  vim.fn["fzf#run"](vim.fn["fzf#wrap"]({
-    source = paths,
-    options = "--preview 'bat --style=numbers --color=always {}' --preview-window=right:70%",
-    sink = function(sel) vim.cmd("edit " .. vim.fn.fnameescape(sel)) end,
-  }))
-end, {})
+  -- Get visual selection
+  local start_pos = vim.fn.getpos("'<")[2]
+  local end_pos = vim.fn.getpos("'>")[2]
+  local query = table.concat(vim.fn.getline(start_pos, end_pos), "\n")
+  query = query:gsub('"', '\\"'):gsub("\n", " ")
+
+  -- Create temp file
+  local tmp_output = vim.fn.tempname() .. ".sqlout"
+
+  -- Run the script
+  local cmd = string.format("~/r_/runner.sh %s %s %s \"%s\" > %s", project, stage, env, query, tmp_output)
+  os.execute(cmd)
+
+  -- Open output
+  vim.cmd("edit " .. tmp_output)
+end, {
+  nargs = "+",
+  range = true,
+  desc = "Send query to dynamic DB script",
+})
+
+-- search for multiple tags with :Rg. order doesnt matter
+vim.api.nvim_create_user_command('Rgtags', function(opts)
+  if #opts.fargs == 0 then
+    print("usage: :Rgtags tag1 tag2 ...")
+    return
+  end
+
+  -- base regex: any line
+  local regex = "^"
+
+  for _, tag in ipairs(opts.fargs) do
+    -- ensure there exists a :<tag...>: somewhere in the line
+    -- [^:]* allows suffix like holdout_method
+    regex = regex .. "(?=.*:" .. tag .. "[^:]*:)"
+  end
+
+  regex = regex .. ".*$"
+
+  local cmd = "Rg --pcre2 '" .. regex .. "'"
+  vim.cmd(cmd)
+end, { nargs = '+' })
+
+
+-- example usage :Rgtags tag1 tag2 
+
+vim.api.nvim_create_user_command('Ypc', function()
+  vim.fn.setreg('+', vim.fn.expand('%:p'))
+end, { desc = 'Yank file path to clipboard' })
 
 

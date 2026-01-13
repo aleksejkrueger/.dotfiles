@@ -221,9 +221,6 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/bufremove"]
 	path = HOME/.config/nvim/pack/plugins/start/bufremove
 	url = https://github.com/echasnovski/mini.bufremove
-[submodule "HOME/.config/nvim/pack/plugins/start/iron.nvim"]
-	path = HOME/.config/nvim/pack/plugins/start/iron.nvim
-	url = https://github.com/Vigemus/iron.nvim.git
 [submodule "HOME/.config/nvim/pack/plugins/start/CopilotChat.vim"]
 	path = HOME/.config/nvim/pack/plugins/start/CopilotChat.vim
 	url = https://github.com/aleksejkrueger/CopilotChat.nvim
@@ -281,3 +278,6 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/avante.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/avante.nvim
 	url = https://github.com/yetone/avante.nvim.git
+[submodule "HOME/.config/nvim/pack/plugins/start/mcphub.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/mcphub.nvim
+	url = https://github.com/ravitemer/mcphub.nvim.git

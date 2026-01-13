@@ -1,0 +1,41 @@
+#!/usr/bin/env zsh
+
+set -e
+
+if [[ -z "$1" ]]; then
+  echo "usage: workup doc-ai | sql-bot"
+  exit 1
+fi
+
+app="$1"
+session="$app-$(date +%s)"
+
+base="$HOME/repositories"
+service_repo="service-${app}-api"
+
+main_dir="$HOME"
+notes_dir="$HOME/notes"
+service_dir="$base/${service_repo}/src/${app//-/_}/apps/web"
+api_dir="$base/${service_repo}"
+env_dir="$base/${service_repo}-env"
+
+tmux new-session -d -s "$session" -n main -c "$main_dir"
+
+tmux new-window -t "$session" -n notes -c "$notes_dir"
+tmux send-keys -t "$session:notes" "nvim vimwiki/${app}.md vimwiki/${app}_onboarding.md" C-m
+sleep 0.4
+tmux send-keys -t "$session:notes" Space e
+tmux send-keys -t "$session:notes" ":VimwikiMakeDiaryNote" C-m
+
+
+tmux new-window -t "$session" -n service -c "$service_dir"
+tmux send-keys -t "$session:service" "fastapi dev main.py" C-m
+
+tmux new-window -t "$session" -n api -c "$api_dir"
+
+tmux new-window -t "$session" -n env -c "$env_dir"
+
+
+tmux select-window -t "$session:1"
+tmux switch-client -t "$session"
+

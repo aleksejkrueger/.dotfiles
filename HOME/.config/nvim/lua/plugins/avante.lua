@@ -17,7 +17,7 @@ require('avante').setup({
         model = "gpt-4o-mini",
         extra_request_body = {
           temperature = 0.1,
-          max_tokens = 4096,
+          max_tokens = 20000,
         },
       },
     },
@@ -43,6 +43,15 @@ require('avante').setup({
     use_cwd_as_project_root = false,
     auto_focus_on_diff_view = false,
     },
+
+        selector = {
+        --- @alias avante.SelectorProvider "native" | "fzf_lua" | "mini_pick" | "snacks" | "telescope" | fun(selector: avante.ui.Selector): nil
+        --- @type avante.SelectorProvider
+        provider = "telescope",
+        -- Options override for custom providers
+        provider_opts = {},
+    },
+
     prompt_logger = {
       enabled = true,
       log_dir = vim.fn.stdpath("cache") .. "/avante_prompts",

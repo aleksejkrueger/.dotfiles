@@ -37,4 +37,6 @@ require "plugins.none-ls"
 require "plugins.dap"
 require "plugins.mason"
 require "plugins.vimwiki"
-require "plugins.iron"
+-- require "plugins.iron"
+require "plugins.mcphub"
+

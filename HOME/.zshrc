@@ -180,3 +180,9 @@ PS1='$(kube_ps1)'$PS1
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
 
+
+### MANAGED BY RANCHER DESKTOP START (DO NOT EDIT)
+export PATH="/Users/aleksej.chaichan/.rd/bin:$PATH"
+### MANAGED BY RANCHER DESKTOP END (DO NOT EDIT)
+
+# export DOCKER_HOST='unix:///var/folders/2g/qw97s4ds3w5c9pztv78fs0_40000gp/T/podman/podman-machine-default-api.sock'
