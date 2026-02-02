@@ -14,10 +14,10 @@ require('avante').setup({
     providers = {
       copilot = {
         endpoint = "https://dkbag.ghe.com",
-        model = "gpt-4o-mini",
+        model = "gpt-4.1-2025-04-14",
         extra_request_body = {
           temperature = 0.1,
-          max_tokens = 20000,
+          max_tokens = 4096,
         },
       },
     },

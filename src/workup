@@ -15,8 +15,8 @@ service_repo="service-${app}-api"
 
 main_dir="$HOME"
 notes_dir="$HOME/notes"
-service_dir="$base/${service_repo}/src/${app//-/_}/apps/web"
-api_dir="$base/${service_repo}"
+service_dir="$base/${service_repo}.git/main/src/${app//-/_}/apps/web"
+api_dir="$base/${service_repo}.git"
 env_dir="$base/${service_repo}-env"
 
 tmux new-session -d -s "$session" -n main -c "$main_dir"

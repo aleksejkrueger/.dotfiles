@@ -40,3 +40,4 @@ require "plugins.vimwiki"
 -- require "plugins.iron"
 require "plugins.mcphub"
 
+require "commands.rgtags"
