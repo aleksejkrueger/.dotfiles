@@ -54,3 +54,16 @@ gitsigns.setup {
   },
 }
 
+-- Gitsigns hunk navigation keymaps
+vim.keymap.set('n', ']c', function()
+  if vim.wo.diff then return ']c' end
+  vim.schedule(function() require('gitsigns').next_hunk() end)
+  return '<Ignore>'
+end, {expr=true, desc='Next Git hunk'})
+
+vim.keymap.set('n', '[c', function()
+  if vim.wo.diff then return '[c' end
+  vim.schedule(function() require('gitsigns').prev_hunk() end)
+  return '<Ignore>'
+end, {expr=true, desc='Prev Git hunk'})
+

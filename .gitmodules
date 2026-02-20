@@ -281,3 +281,9 @@
 [submodule "HOME/.config/nvim/pack/plugins/start/mcphub.nvim"]
 	path = HOME/.config/nvim/pack/plugins/start/mcphub.nvim
 	url = https://github.com/ravitemer/mcphub.nvim.git
+[submodule "HOME/.config/nvim/pack/plugins/start/neogit"]
+	path = HOME/.config/nvim/pack/plugins/start/neogit
+	url = https://github.com/NeogitOrg/neogit
+[submodule "HOME/.config/nvim/pack/plugins/start/diffview.nvim"]
+	path = HOME/.config/nvim/pack/plugins/start/diffview.nvim
+	url = https://github.com/sindrets/diffview.nvim
