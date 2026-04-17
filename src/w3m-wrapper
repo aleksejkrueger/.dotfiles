@@ -1,0 +1,10 @@
+#!/bin/bash
+
+if [ -x /usr/local/bin/w3m ]; then
+    exec /usr/local/bin/w3m "$@"
+elif [ -x /usr/bin/w3m ]; then
+    exec /usr/bin/w3m "$@"
+else
+    echo "w3m not found" >&2
+    exit 1
+fi

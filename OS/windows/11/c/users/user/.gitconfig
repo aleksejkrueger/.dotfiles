@@ -1,0 +1,5 @@
+[user]
+	name = alexchaichan
+	email = 
+[http]
+	sslBackend = schannel

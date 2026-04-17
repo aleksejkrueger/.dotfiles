@@ -1,0 +1,37 @@
+[user]
+	name = aleksej.krueger
+  email = alex.mailme@icloud.com
+	useConfigOnly = true
+[credential]
+	helper = !pass-git-helper $@
+[credential "https://github.com"]
+	helper = !pass-git-helper $@
+[include]
+	path = ~/.gitconfig-codefactory-rules
+[push]
+	autoSetupRemote = true
+[alias]
+  s = status
+
+  # Create merge request (GitLab)
+  pmr = "!f() { \
+    description=\"$1\"; \
+    shift 2; \
+    assignee_name=$(git config user.name); \
+    assignee_email=$(git config user.email); \
+    output=$(git push \
+      -o merge_request.create \
+      -o merge_request.assign=\"$assignee_name <$assignee_email>\" \
+      -o merge_request.description=\"$description\" \
+      \"$@\" 2>&1); \
+    echo \"$output\"; \
+    url=$(echo \"$output\" | grep -Eo 'https?://[^ ]*merge_requests[^ ]*' | head -n1); \
+    if [ -n \"$url\" ]; then \
+      echo \"Opening merge request URL: $url\"; \
+      open \"$url\"; \
+    else \
+      echo \"Merge request URL not found.\" >&2; \
+      exit 1; \
+    fi; \
+  }; f"
+

@@ -1,0 +1,21 @@
+#!/bin/sh
+
+# Determine the type of OS
+case "$(uname -s)" in
+    Linux)
+
+        # Check if running under Windows Subsystem for Linux (WSL)
+        if grep -qi microsoft /proc/version; then
+            echo "wsl"
+        else
+            echo "linux"
+        fi
+        ;;
+    Darwin)
+        echo "osx"
+        ;;
+
+    *)
+        echo "unknown"
+        ;;
+esac

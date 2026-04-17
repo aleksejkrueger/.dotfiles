@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Note Viewer</title>
+    <link rel="stylesheet" href="note.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Dracula Viewer</p>
+          <h1 id="note-title">Loading…</h1>
+          <p id="note-path" class="note-path"></p>
+        </div>
+        <div class="actions">
+          <button id="reload-note" class="button secondary">Reload</button>
+          <button id="open-raw" class="button">Open Raw</button>
+        </div>
+      </header>
+
+      <section class="meta panel">
+        <div id="tag-list" class="tag-list"></div>
+      </section>
+
+      <section class="content panel">
+        <div id="status" class="status">Loading note…</div>
+        <article id="note-content" class="markdown"></article>
+      </section>
+    </main>
+
+    <script src="note.js" type="module"></script>
+  </body>
+</html>

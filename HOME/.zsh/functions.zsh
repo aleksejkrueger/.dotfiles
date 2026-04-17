@@ -1,0 +1,336 @@
+#!/usr/bin/env zsh
+
+# command exists ?
+command_exists() {
+    local command="$1"
+    type "$command" >/dev/null 2>&1
+}
+
+
+######################################################################
+# aliasas                                                            #
+######################################################################
+
+# open $DOTDIR repo
+dots(){
+  cd $DOTFILES
+}
+
+push-dots(){
+  cd $DOTFILES && gitpush && cd $HOME && cd $HOME/data-science && gitpush && cd $HOME/cheatsheets && gitpush && cd $HOME/Templates && gitpush && cd $HOME
+}
+
+pull-dots(){
+  cd $DOTFILES && git pull && cd $HOME && cd $HOME/data-science && git pull && cd $HOME/cheatsheets && git pull && cd $HOME/Templates && git pull && cd $HOME
+}
+# open this file
+funs(){
+    nvim $HOME/.dotfiles/HOME/.zsh/functions.zsh
+}
+
+update(){
+  if [[ "$os" == "osx" ]]; then
+      sudo -v
+      PlugUpdate && brew update && brew upgrade && brew cleanup && brew outdated && brew cu && softwareupdate -i -a
+  elif [[ "$os" == "linux" ]]; then
+    sudo pacman -Syu
+  fi
+}
+######################################################################
+#git
+######################################################################
+
+# quick push git
+gitpush(){
+  git add .
+  git commit -m "update"
+  git push
+}
+
+# pull all repos start searching from actual directory
+alias gitpullall="find . -maxdepth 300 -name .git -type d | rev | cut -c 6- | rev | xargs -I {} git -C {} pull"
+
+######################################################################
+
+# better ls
+alias l="colorls --dark -a"
+alias ls="eza --color=always --long --git --icons=always --no-time --no-user --no-permissions"
+
+# get easy keyboard hex codes
+hex(){
+    xxd -psd
+}
+
+# check weather in $1 location
+weather(){
+    curl v2d.wttr.in/$1
+}
+
+#lazygit
+alias lg="lazygit"
+alias lq="lazysql"
+
+# open neomutt
+alias mutt="stty discard undef && neomutt"
+
+# open neovim
+alias vim="nvim"
+
+get-ip(){
+  ifconfig | grep -E "([0-9]{1,3}\.){3}[0-9]{1,3}" | grep -v 127.0.0.1 | head -1 | awk '{ print $2 }'
+}
+
+#####################################################
+# zsh functions                                     #
+#####################################################
+
+# ZSH functions to start/stop OpenConnect VPN client
+function vpn-uk() {
+     pass show uni-kassel.de/uk069555  | sudo openconnect  --user=uk069555 --passwd-on-stdin https://vpn.uni-kassel.de/  --useragent=AnyConnect
+   }
+
+function vpn-down() {
+  sudo kill -2 `pgrep openconnect`
+}
+
+# connect to the server
+connect(){
+  osascript -e 'tell application "Finder" to open location "smb://smb.uni-kassel.de/vpvs"'
+  osascript -e 'delay 3' -e 'tell application "System Events" to keystroke tab & return & return'
+}
+
+# disconnect
+disconnect(){
+    umount /Volumes/vpvs
+}
+
+function waitlift() {
+  if [[ $# -eq 0 ]]; then
+    echo "Usage: waitlift <command>"
+    return 1
+  fi
+
+  echo "🕒 Waiting for liftoff: '$@'"
+
+  until "$@"; do
+    echo "🔁 Retry: '$@' failed. Waiting..."
+    sleep 1
+  done
+
+  echo "✅ Liftoff! '$@' succeeded."
+}
+#####################################################
+# zsh functions mac                                 #
+#####################################################
+
+if [[ "$os" == "osx" ]]; then
+
+audiomidisetup(){
+  /usr/bin/open -a "Audio MIDI Setup"
+}
+
+terminal(){
+    /usr/bin/open -a Terminal
+}
+
+safari(){
+    /usr/bin/open -a Safari $1
+}
+
+psychopy(){
+    /usr/bin/open -a psychopy
+}
+
+messages(){
+    /usr/bin/open -a Messages
+}
+
+zoom(){
+    /usr/bin/open -a zoom.us
+}
+
+firefox(){
+    /usr/bin/open -a Firefox $1
+}
+
+skim(){
+    /usr/bin/open -a Skim $1
+}
+
+diskutility(){
+    /usr/bin/open -a "Disk Utility"
+}
+
+csv(){
+    /usr/bin/open -a "Easy CSV Editor"
+}
+
+json(){
+    /usr/bin/open -a "JSON Editor"
+}
+
+plist(){
+    /usr/bin/open -a "PLIST Editor"
+}
+
+dropbox(){
+    /usr/bin/open -a Dropbox
+}
+
+maps(){
+    /usr/bin/open -a Maps
+}
+
+facetime(){
+    /usr/bin/open -a FaceTime
+}
+
+system(){
+    /usr/bin/open -a "System Preferences"
+}
+
+appstore(){
+    /usr/bin/open -a "App Store"
+}
+
+preview(){
+    /usr/bin/open -a Preview $1
+}
+
+rstudio(){
+    /usr/bin/open -a Rstudio $1
+}
+
+mails(){
+    /usr/bin/open -a Mail
+}
+
+amphetamine(){
+  /usr/bin/open -a Amphetamine
+}
+
+calendar(){
+  /usr/bin/open -a Calendar
+}
+
+wifi-scan(){
+  /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s
+}
+
+wifi-connect(){
+  networksetup -setairportnetwork en0 $1 $2
+}
+
+spt(){
+
+  if [[ "$os" == "osx" && -z $(timeout 1s top | grep -m1 spotifyd | awk '{print $2}') ]]; then
+    spotifyd-wrapper
+    spt-wrapper $@
+
+  else
+    spt-wrapper $@
+
+  fi
+}
+
+keychron(){
+  blueutil -p 1 && blueutil --connect $(pass bluetooth/keychronk2)
+}
+
+logi(){
+  blueutil -p 1 && blueutil --connect $(pass bluetooth/zonevibe100)
+}
+
+search() {
+  [[ -z "$1" ]] && echo "Usage: s <term>" && return 1
+  grep -rniw --exclude-dir=".git" . -e "$1"
+  echo "\n---\ndistinct files"
+  grep -rlw --exclude-dir=".git" . -e "$1"
+}
+
+######################################################################
+fi
+
+#####################################################
+# zsh functions linux                               #
+#####################################################
+
+if [[ "$os" == "linux" ]]; then
+
+logi(){
+  bluetoothctl connect 44:73:D6:A4:50:D8
+}
+
+clear(){
+  /usr/bin/clear
+}
+
+rstudio(){
+  /usr/bin/rstudio  $1
+}
+
+fi
+
+#####################################################
+# ssh                                               #
+#####################################################
+
+ssh_uk(){
+  pass .
+  ssh "$(pass ssh/uk)"
+}
+
+###
+alias notes='cd "$HOME/notes" && nvim "vimwiki/$(date +%Y-%m-%d).md"'
+
+_gvim_preview() {
+  local file="$1"
+
+  if git status --short -- "$file" | grep -q '^?? '; then
+    bat --style=numbers --color=always --line-range :300 -- "$file"
+    return
+  fi
+
+  local diff_output
+  diff_output="$(
+    {
+      git diff --no-ext-diff -- "$file"
+      git diff --no-ext-diff --cached -- "$file"
+    } 2>/dev/null
+  )"
+
+  if [[ -n "$diff_output" ]]; then
+    printf '%s\n' "$diff_output" | delta \
+      --paging=never \
+      --syntax-theme=Dracula \
+      --line-numbers \
+      --line-numbers-plus-style='#50fa7b "#1f3a2a"' \
+      --line-numbers-minus-style='#ff5555 "#4a1f2b"' \
+      --plus-style='syntax "#1f3a2a"' \
+      --minus-style='syntax "#4a1f2b"' \
+      --plus-emph-style='syntax bold "#1f3a2a"' \
+      --minus-emph-style='syntax bold "#4a1f2b"' \
+      --keep-plus-minus-markers
+  else
+    bat --style=numbers --color=always --line-range :300 -- "$file"
+  fi
+}
+
+gvim() {
+  local selected
+  local -a files
+
+  selected="$(
+    git ls-files -m -o --exclude-standard |
+      fzf -m \
+        --preview 'zsh -c '\''source "$HOME/.dotfiles/HOME/.zsh/functions.zsh"; _gvim_preview "$1"'\'' _ {}' \
+        --preview-window='right,70%,border-left'
+  )"
+
+  [[ -n "$selected" ]] || return 0
+
+  files=("${(@f)selected}")
+
+  (( ${#files[@]} )) || return 0
+  nvim "${files[@]}"
+}

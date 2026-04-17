@@ -1,0 +1,4 @@
+pubring.kbx
+private-keys-v1.d/*
+trustdb.gpg
+random_seed

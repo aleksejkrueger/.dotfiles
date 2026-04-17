@@ -1,0 +1,25 @@
+cinnamon xorg xorg-server pass git neovim qutebrowser alacritty zsh tmux fzf pass unzip blueman bluez-utils mpv openconnect r spotifyd ruby jupyterlab pyenv renv bat pdfjs pandoc texlive-basic texlive-fontsextra texlive-latexextra texlive-luatex texlive-mathscience texlive-xetex ufw zathura-pdf-poppler gcc gcc-fortran imagemagick dmenu thunderbird netctl networkmanager spotifyd libreoffice-still
+
+python-tldextract python-adblock 
+
+
+cd /tmp/
+git clone https://aur.archlinux.org/sublime-text-4.git 
+git clone https://aur.archlinux.org/pass-git-helper.git 
+git clone https://aur.archlinux.org/redshift-minimal.git
+git clone https://aur.archlinux.org/ruby-clocale.git
+git clone https://aur.archlinux.org/ruby-filesize.git
+git clone https://aur.archlinux.org/ruby-colorls.git
+git clone https://aur.archlinux.org/dracula-gtk-theme.git
+git clone https://aur.archlinux.org/soci.git
+git clone https://aur.archlinux.org/rstudio-desktop.git 
+git clone https://aur.archlinux.org/brave-bin.git
+git clone https://aur.archlinux.org/zoom.git
+git clone https://aur.archlinux.org/spotify-tui.git
+git clone https://aur.archlinux.org/dropbox.git
+git clone https://aur.archlinux.org/nemo-dropbox.git
+
+cd $HOME
+git clone https://github.com/alexchaichan/cheatsheets.git
+git clone https://github.com/alexchaichan/data-science.git
+git clone https://github.com/alexchaichan/Templates.git

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local Notes Tag Finder</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="panel hero">
+        <div>
+          <p class="eyebrow">Brave / Chromium</p>
+          <h1>Local Notes Tag Finder</h1>
+          <p class="subtle">
+            Query a local read-only helper for markdown notes with YAML frontmatter, filter by tags, then open them in a browser viewer.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel settings">
+        <div class="actions">
+          <button id="refresh" class="button">Refresh Notes</button>
+          <button id="check-server" class="button secondary">Check Helper</button>
+        </div>
+        <p id="folder-status" class="status">Helper not checked yet.</p>
+        <p id="index-status" class="status muted">No notes loaded yet.</p>
+        <p id="tmux-status" class="hint">Open notes in a new tmux window with <code>nvim</code>.</p>
+        <div class="daily-row">
+          <label class="field daily-field">
+            <span>Daily Note</span>
+            <input id="daily-note-date" type="date">
+          </label>
+          <div class="daily-actions">
+            <button id="open-daily-nvim" class="button secondary compact-action" type="button">nvim</button>
+            <button id="open-daily-file" class="button compact-action" type="button">Open</button>
+          </div>
+        </div>
+        <p id="daily-note-status" class="hint">Pick a day to open that daily note.</p>
+      </section>
+
+      <section class="panel search">
+        <label class="field">
+          <span>Tags</span>
+          <input id="tag-query" type="text" placeholder="codex, documentation or codex + documentation">
+        </label>
+        <p class="hint">Use commas for OR. Use <code>+</code> for AND.</p>
+        <label class="field filter-single">
+          <span>Created In Last X Days</span>
+          <input id="created-within-days" type="number" min="1" step="1" value="7">
+        </label>
+        <div class="meta-row">
+          <span id="results-summary">0 notes</span>
+          <button id="clear-query" class="button ghost">Clear</button>
+        </div>
+        <div id="tag-cloud" class="tag-cloud"></div>
+      </section>
+
+      <section class="panel results">
+        <div id="results" class="results-list"></div>
+      </section>
+    </main>
+
+    <template id="result-template">
+      <article class="result-card">
+        <div class="result-top">
+          <div class="result-main">
+            <h2 class="result-title"></h2>
+            <p class="result-path"></p>
+          </div>
+          <div class="result-actions">
+            <button class="button secondary compact-action open-in-tmux" type="button" aria-label="Open in nvim" title="Open in nvim">nvim</button>
+            <button class="button open-note" type="button">Open File</button>
+          </div>
+        </div>
+        <p class="result-meta"></p>
+        <div class="result-tags"></div>
+        <p class="result-preview"></p>
+      </article>
+    </template>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

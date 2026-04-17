@@ -1,0 +1,7 @@
+jupytext
+ipython
+tldextract
+pip-tools
+wheel
+neovim
+pynvim

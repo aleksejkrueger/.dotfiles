@@ -1,0 +1,152 @@
+palette = "dracula"
+
+format = """
+$line_break[╭─](bold fg:comment) $directory$git_branch$git_status$python$direnv$kubernetes$aws$cmd_duration$fill  $time  
+$character
+"""
+
+scan_timeout = 30
+command_timeout = 750
+add_newline = false
+continuation_prompt = "[∙](bright-black) "
+
+[palettes.dracula]
+foreground = "#f8f8f2"
+background = "#282a36"
+comment = "#6272a4"
+cyan = "#8be9fd"
+green = "#50fa7b"
+orange = "#ffb86c"
+pink = "#ff79c6"
+purple = "#bd93f9"
+red = "#ff5555"
+yellow = "#f1fa8c"
+white = "#f8f8f2"
+black = "#21222c"
+
+[character]
+format = "[╰─](bold fg:comment)$symbol "
+success_symbol = "[❯](bold fg:green)"
+error_symbol = "[❯](bold fg:red)"
+vimcmd_symbol = "[❮](bold fg:green)"
+vimcmd_replace_one_symbol = "[❮](bold fg:yellow)"
+vimcmd_replace_symbol = "[❯](bold fg:yellow)"
+vimcmd_visual_symbol = "[󰈈](bold fg:purple)"
+
+[fill]
+symbol = ""
+style = "bold fg:comment"
+
+[direnv]
+disabled = true
+symbol = " "
+tyle = "bold fg:yellow"
+format = "[$symbol$loaded/$allowed ]($style)"
+
+
+[os]
+disabled = false
+format = "[$symbol ](fg:white)"
+
+[os.symbols]
+Macos = ""
+Ubuntu = ""
+Debian = ""
+Arch = ""
+Windows = "󰍲"
+Unknown = "󰘔"
+
+[directory]
+home_symbol = "~"
+read_only = " "
+truncation_length = 1
+truncate_to_repo = false
+style = "bold fg:yellow"
+read_only_style = "fg:yellow"
+format = "[$path]($style)[$read_only]($read_only_style) "
+
+[git_branch]
+symbol = " "
+style = "bold fg:green"
+format = "[$symbol$branch ]($style)"
+only_attached = true
+
+[git_status]
+style = "bold fg:green"
+format = "[$all_status$ahead_behind ]($style)"
+conflicted = "~${count}"
+ahead = "⇡${count}"
+behind = "⇣${count}"
+diverged = "⇕⇡${ahead_count}⇣${behind_count}"
+up_to_date = ""
+untracked = "?${count}"
+stashed = "*${count}"
+modified = "!${count}"
+staged = "+${count}"
+renamed = "»${count}"
+deleted = "✘${count}"
+
+[status]
+disabled = false
+pipestatus = true
+style = "bold fg:green"
+pipestatus_separator = "[|](fg:comment)"
+pipestatus_format = "[$pipestatus ]($style)"
+format = "[$symbol$status ]($style)"
+symbol = "󰅙 "
+success_symbol = ""
+not_executable_symbol = "!"
+not_found_symbol = "?"
+sigint_symbol = "󰚌 "
+map_symbol = true
+
+[cmd_duration]
+min_time = 5000
+show_milliseconds = false
+style = "bold fg:yellow"
+format = "[ 󱑁 $duration ]($style)"
+
+[python]
+disabled = false
+symbol = " "
+style = "bold fg:cyan"
+pyenv_version_name = false
+pyenv_prefix = ""
+python_binary = "python3"
+detect_extensions = []
+detect_files = []
+detect_folders = ["venv", ".venv"]
+format = "[$symbol$version(\\($virtualenv\\)) ]($style)"
+
+[terraform]
+symbol = " "
+style = "bold fg:comment"
+format = "[$symbol$workspace ]($style)"
+
+[kubernetes]
+disabled = false
+symbol = "☸ "
+style = "bold fg:pink"
+format = "[$symbol$context( /$namespace) ]($style)"
+contexts = [
+  { context_pattern = "arn:aws:eks:[^:]+:[^:]+:cluster/(.*)", context_alias = "$1" },
+]
+
+[aws]
+disabled = false
+symbol = "󰸏 "
+style = "bold fg:purple"
+format = "[$symbol$profile ]($style)"
+force_display = false
+
+[package]
+disabled = false
+
+[battery]
+disabled = false
+
+[time]
+disabled = false
+time_format = "%H:%M:%S"
+style = "bold fg:white"
+format = "[$time]($style)"

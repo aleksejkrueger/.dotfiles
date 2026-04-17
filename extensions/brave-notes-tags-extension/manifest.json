@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Local Notes Tag Finder",
+  "version": "0.3.0",
+  "description": "Filter local markdown notes by tags and file metadata through a local helper, then open them via file:/// or tmux+nvim",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*"
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Open Local Notes Tag Finder"
+    }
+  },
+  "action": {
+    "default_title": "Local Notes Tag Finder",
+    "default_popup": "popup.html"
+  }
+}
