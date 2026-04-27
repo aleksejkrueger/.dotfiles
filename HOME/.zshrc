@@ -47,6 +47,10 @@ if [[ "$os" == "wsl" ]]; then
   fi
 fi
 
+if [ -f $(brew --prefix)/etc/brew-wrap ]; then
+  source $(brew --prefix)/etc/brew-wrap
+fi
+
 autoload -Uz add-zsh-hook zmv compinit
 
 HISTFILE="$ZDOTDIR/.zsh_history"

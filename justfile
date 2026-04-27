@@ -48,7 +48,12 @@ os device='':
     while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null & \
     bash -c "source $(pwd)/OS/osx/.macos"; \
     echo 'install Brewfile'; \
-    brew bundle --file="$(pwd)/OS/osx/Brewfile_${DEVICE}"; \
+    brew tap rcmdnk/file; \
+    brew install brew-file; \
+    if [ -f $(brew --prefix)/etc/brew-wrap ]; then \
+      source $(brew --prefix)/etc/brew-wrap \
+    fi;\
+    brew file install; \
     echo 'source duti-file'; \
     bash -c "source $(pwd)/OS/osx/duti.sh"; \
     mkdir -p "$HOME/.qutebrowser"; \
