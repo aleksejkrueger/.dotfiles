@@ -6,6 +6,26 @@ end
 local actions = require "telescope.actions"
 local icons = require "plugins.icons"
 
+local function patch_treesitter_preview_fallback()
+  local ok, preview_utils = pcall(require, "telescope.previewers.utils")
+  if not ok or preview_utils._dotfiles_ts_fallback_patched then
+    return
+  end
+
+  local ts_highlighter = preview_utils.ts_highlighter
+  preview_utils.ts_highlighter = function(bufnr, ft)
+    local success, result = pcall(ts_highlighter, bufnr, ft)
+    if success then
+      return result
+    end
+    return false
+  end
+
+  preview_utils._dotfiles_ts_fallback_patched = true
+end
+
+patch_treesitter_preview_fallback()
+
 telescope.setup {
   defaults = {
 

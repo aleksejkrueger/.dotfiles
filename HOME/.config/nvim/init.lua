@@ -16,6 +16,8 @@ vim.g.skip_ts_context_commentstring_module = true
 
 require("packages").bootstrap()
 
+require("treesitter_compat").setup()
+
 -- basics
 require "settings"
 require "keymaps"
