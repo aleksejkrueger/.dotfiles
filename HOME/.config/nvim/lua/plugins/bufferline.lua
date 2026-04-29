@@ -3,6 +3,9 @@ if not status_ok then
   return
 end
 
+local active_buffer_fg = "#ffffff"
+local inactive_buffer_fg = "#000000"
+
 bufferline.setup {
   options = {
     numbers = "none", -- | "ordinal" | "buffer_id" | "both" | function({ ordinal, id, lower, raise }): string,
@@ -76,73 +79,72 @@ bufferline.setup {
       bg = "NONE",
     },
     background = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
     },
 
-    -- buffer_selected = {
-    --   fg = {attribute='fg',highlight='#ff0000'},
-    --   bg = {attribute='bg',highlight='#0000ff'},
-    --   sp = 'none'
-    --   },
+    buffer_selected = {
+      fg = active_buffer_fg,
+      bg = "NONE",
+    },
     buffer_visible = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
     },
 
     close_button = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
     },
     close_button_visible = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
     },
-    -- close_button_selected = {
-    --   fg = {attribute='fg',highlight='TabLineSel'},
-    --   bg ={attribute='bg',highlight='TabLineSel'}
-    --   },
+    close_button_selected = {
+      fg = active_buffer_fg,
+      bg = "NONE",
+    },
 
     tab_selected = {
-      fg = { attribute = "fg", highlight = "Normal" },
+      fg = active_buffer_fg,
       bg = "NONE",
     },
     tab = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
     },
     tab_close = {
       -- fg = {attribute='fg',highlight='LspDiagnosticsDefaultError'},
-      fg = { attribute = "fg", highlight = "TabLineSel" },
+      fg = active_buffer_fg,
       bg = "NONE",
     },
 
     duplicate_selected = {
-      fg = { attribute = "fg", highlight = "TabLineSel" },
+      fg = active_buffer_fg,
       bg = "NONE",
       italic = true,
     },
     duplicate_visible = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
       italic = true,
     },
     duplicate = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
       italic = true,
     },
 
     modified = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
     },
     modified_selected = {
-      fg = { attribute = "fg", highlight = "Normal" },
+      fg = active_buffer_fg,
       bg = "NONE",
     },
     modified_visible = {
-      fg = { attribute = "fg", highlight = "TabLine" },
+      fg = inactive_buffer_fg,
       bg = "NONE",
     },
 
