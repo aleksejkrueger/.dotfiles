@@ -9,7 +9,6 @@ brew aom
 brew aribb24
 brew assimp@5
 brew at-spi2-core
-brew autoconf
 brew awscli
 brew azure-cli
 brew bash
@@ -154,7 +153,6 @@ brew libdeflate
 brew libepoxy
 brew libevent
 brew libexif
-brew libffcall
 brew libfixposix
 brew libgcrypt
 brew libgit2
@@ -249,7 +247,6 @@ brew mysql
 brew nb
 brew ncdu
 brew ncurses
-brew neofetch
 brew neomutt
 brew neovim
 brew netpbm
@@ -300,7 +297,6 @@ brew protobuf@29
 brew pstoedit
 brew pycparser
 brew pydantic
-brew pyenv
 brew pygments
 brew pyright
 brew python-packaging
@@ -356,6 +352,7 @@ brew unbound
 brew unibilium
 brew urlview
 brew utf8proc
+brew uv
 brew uvwasi
 brew vapoursynth
 brew vdirsyncer
@@ -385,7 +382,6 @@ cask alacritty
 cask brave-browser
 cask claude
 cask codex
-cask copilot-cli
 cask db-browser-for-sqlite
 cask discord
 cask excalidrawz
@@ -393,6 +389,7 @@ cask font-hack-nerd-font
 cask font-sauce-code-pro-nerd-font
 cask monitorcontrol
 cask notunes
+cask obsidian
 cask qutebrowser
 cask qview
 cask rstudio
@@ -457,10 +454,13 @@ tap textualize/homebrew
 tap zegervdv/zathura
 brew zathura-pdf-poppler
 
+# Other Homebrew packages
+brew neofetch
+
 # App Store applications
 appstore 1569813296 1Password for Safari (8.12.12)
 appstore 937984704 Amphetamine (5.3.2)
 appstore 1352778147 Bitwarden (2026.3.1)
-appstore 1171346381 Easy CSV Editor (2.69)
+appstore 1171346381 Easy CSV Editor (2.70)
 appstore 508368068 Get Plain Text (2.0)
 appstore 409201541 Pages (14.5)

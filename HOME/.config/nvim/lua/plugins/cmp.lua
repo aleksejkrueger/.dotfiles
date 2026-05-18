@@ -92,10 +92,7 @@ end
 
 -- lspkind setup
 local lspkind = require("lspkind")
-lspkind.init({
-  symbol_map = { Copilot = "" },
-})
-vim.api.nvim_set_hl(0, "CmpItemKindCopilot", { fg = "#6CC644" })
+lspkind.init()
 
 -- icons fallback
 local kind_icons = {
@@ -158,7 +155,6 @@ cmp.setup({
         luasnip = "[Snippet]",
         buffer = "[Buffer]",
         path = "[Path]",
-        copilot = "[Copilot]",
       })[entry.source.name]
       return vim_item
     end,
@@ -166,7 +162,6 @@ cmp.setup({
   sources = cmp.config.sources({
     { name = "nvim_lsp" },
     { name = "luasnip" },
-    { name = "copilot", group_index = 2 },
     { name = "buffer" },
     { name = "path" },
   }),
@@ -177,4 +172,3 @@ cmp.setup({
   },
   experimental = { ghost_text = false, native_menu = false },
 })
-

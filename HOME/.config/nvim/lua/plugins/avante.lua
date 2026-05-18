@@ -49,23 +49,15 @@ require('render-markdown').setup({
 })
 
 local avante_config = {
-  ---@alias Provider "copilot"
+  ---@alias Provider "codex"
   ---@type Provider
-  provider = "copilot",
+  provider = "codex",
 
   ---@alias Mode "agentic" | "legacy"
   ---@type Mode
   mode = "legacy",
-  auto_suggestions_provider = "copilot",
+  auto_suggestions_provider = "codex",
   providers = {
-    copilot = {
-      endpoint = "https://dkbag.ghe.com",
-      model = "gpt-5-mini",
-      extra_request_body = {
-        temperature = 0.1,
-        max_tokens = 4096,
-      },
-    },
   },
   behaviour = {
     auto_approve_tool_permissions = false,

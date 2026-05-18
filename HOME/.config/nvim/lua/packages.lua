@@ -10,9 +10,6 @@ local core_specs = {
   { name = 'cmp-nvim-lsp', src = 'https://github.com/hrsh7th/cmp-nvim-lsp.git', version = 'bd5a7d6db125d4654b50eeae9f5217f24bb22fd3' },
   { name = 'cmp-path', src = 'https://github.com/hrsh7th/cmp-path.git', version = '91ff86cd9c29299a64f968ebb45846c485725f23' },
   { name = 'cmp_luasnip', src = 'https://github.com/saadparwaiz1/cmp_luasnip.git', version = '98d9cb5c2c38532bd9bdb481067b20fea8f32e90' },
-  { name = 'copilot-cmp', src = 'https://github.com/zbirenbaum/copilot-cmp.git', version = '15fc12af3d0109fa76b60b5cffa1373697e261d1' },
-  { name = 'copilot-lsp', src = 'https://github.com/copilotlsp-nvim/copilot-lsp.git', version = 'a80e0c17e7366614d39506825f49a25d285fead9' },
-  { name = 'copilot.lua', src = 'https://github.com/zbirenbaum/copilot.lua.git', version = '92e08cd472653beaece28ad9c8508a851a613358' },
   { name = 'friendly-snippets', src = 'https://github.com/rafamadriz/friendly-snippets.git', version = '572f5660cf05f8cd8834e096d7b4c921ba18e175' },
   { name = 'gitsigns.nvim', src = 'https://github.com/lewis6991/gitsigns.nvim.git', version = '4a143f13e122ab91abdc88f89eefbe70a4858a56' },
   { name = 'impatient.nvim', src = 'https://github.com/lewis6991/impatient.nvim.git', version = '47302af74be7b79f002773011f0d8e85679a7618' },
@@ -41,7 +38,6 @@ local core_specs = {
 }
 
 local optional_specs = {
-  { name = 'CopilotChat.nvim', src = 'https://github.com/CopilotC-Nvim/CopilotChat.nvim.git', version = '21bdecb25aa72119d11d7fc08c7e0ce323f1b540' },
   { name = 'avante.nvim', src = 'https://github.com/yetone/avante.nvim.git', version = 'e89eb79abf5754645e20aa6074da10ed20bba33c' },
   { name = 'bufremove', src = 'https://github.com/echasnovski/mini.bufremove', version = '66019ecebdc5bc0759e04747586994e2e3f98416' },
   { name = 'diffview.nvim', src = 'https://github.com/sindrets/diffview.nvim', version = '4516612fe98ff56ae0415a259ff6361a89419b0a' },
