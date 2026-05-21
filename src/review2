@@ -27,6 +27,9 @@ Useful keys in the UI:
 - m opens the threaded comments popup; Up/Down or j/k select comments, r replies.
 - o opens the current GitLab MR or GitHub PR in the browser.
 - p publishes local #review markers, with output shown in a popup.
+
+For a lightweight picker instead of the full TUI, run "review2 --fast". It opens
+fzf with a delta-powered preview above the file list and respects --base.
 """
 
 from __future__ import annotations
@@ -537,6 +540,65 @@ def show_diff(base: str, path: str, branch: str | None = None) -> None:
         git_process.stdout.close()
     delta_process.wait()
     git_process.wait()
+
+
+def fast_preview_command(base: str, branch: str) -> str:
+    """Return the shell preview command used by fzf fast mode."""
+    git_command = [
+        "git",
+        "diff",
+        "--no-ext-diff",
+        "--color=always",
+        f"--src-prefix={base}/",
+        f"--dst-prefix={branch}/",
+        f"{base}...HEAD",
+        "--",
+        "{}",
+    ]
+    delta_arguments = [argument for argument in delta_command(paging="never") if not argument.startswith("--width=")]
+    git_part = shlex.join(git_command).replace("'{}'", "{}")
+    delta_part = f"{shlex.join(delta_arguments)} --width=${{FZF_PREVIEW_COLUMNS:-120}}"
+    return f"if command -v delta >/dev/null 2>&1; then {git_part} | {delta_part}; else {git_part}; fi"
+
+
+def fast_select_file(base: str, files: Sequence[ChangedFile]) -> str | None:
+    """Select a changed file with fzf and an inline diff preview."""
+    command = [
+        "fzf",
+        "--ansi",
+        "--height=100%",
+        "--layout=reverse",
+        "--border",
+        "--prompt=review2 fast> ",
+        "--preview-window=up,70%,border-bottom",
+        "--preview",
+        fast_preview_command(base, branch_name()),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            input="\n".join(changed_file.path for changed_file in files),
+            stdout=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        die("missing dependency: fzf")
+    if result.returncode != 0:
+        return None
+    selected = result.stdout.strip()
+    return selected or None
+
+
+def fast_review(base: str) -> None:
+    """Run the lightweight fzf/delta review flow."""
+    files = changed_files(base)
+    if not files:
+        print(f"No files changed against {base}.")
+        return
+    selected = fast_select_file(base, files)
+    if selected is not None:
+        show_diff(base, selected, branch_name())
 
 
 def side_by_side_diff_lines(base: str, path: str, width: int, branch: str | None = None) -> list[str]:
@@ -2089,6 +2151,7 @@ def parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     argument_parser = argparse.ArgumentParser(description="Review branch changes from the terminal.")
     argument_parser.add_argument("--base", help="base branch/ref to compare against")
+    argument_parser.add_argument("--fast", action="store_true", help="open the lightweight fzf/delta review picker")
     subparsers = argument_parser.add_subparsers(dest="command")
 
     subparsers.add_parser("status", help="show changed files and reviewed checkboxes")
@@ -2126,6 +2189,9 @@ def normalize_args(arguments: Sequence[str]) -> list[str]:
         elif argument.startswith("--base="):
             normalized.append(argument)
             index += 1
+        elif argument == "--fast":
+            normalized.append(argument)
+            index += 1
         else:
             remaining.append(argument)
             index += 1
@@ -2138,7 +2204,9 @@ def main() -> None:
     base = args.base or default_base()
     verify_base(base)
 
-    if args.command in {None, "ui"}:
+    if args.fast:
+        fast_review(base)
+    elif args.command in {None, "ui"}:
         interactive(base)
     elif args.command == "status":
         print_status(base)
