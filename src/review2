@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import curses
+import hashlib
 import json
 import os
 import re
@@ -21,6 +22,7 @@ REVIEW_MARKER_RE = re.compile(r"(?P<prefix>#|//|--|;|/\*|\*)\s*review\b:?\s*(?P<
 LEGACY_MARKER_RE = re.compile(r"\bREVIEW2:\s*(?P<body>.*)$")
 MARKER_RE = re.compile(r"(?:#|//|--|;|/\*|\*)\s*review\b:?.*$|\bREVIEW2:\s*.*$", re.IGNORECASE)
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+BASIC_ANSI_COLOR_CODES = {*range(30, 38), *range(90, 98)}
 HELP_TEXT = (
     "/ search  f filter  j/k move  J/K scroll  Space toggle  c/e edit  d pager  p publish  "
     "r refresh  q quit"
@@ -147,6 +149,19 @@ def branch_name() -> str:
     return branch or "HEAD"
 
 
+def ref_exists(ref: str) -> bool:
+    """Return whether a git ref exists."""
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
 def default_base() -> str:
     """Return the repository default comparison base."""
     for ref in ("origin/HEAD", "main", "master"):
@@ -159,7 +174,8 @@ def default_base() -> str:
         except subprocess.CalledProcessError:
             continue
         if output:
-            return output.removeprefix("origin/")
+            local_ref = output.removeprefix("origin/")
+            return local_ref if ref_exists(local_ref) else output
     return "main"
 
 
@@ -214,6 +230,30 @@ def changed_files(base: str) -> list[ChangedFile]:
 def reviewed_paths(state: dict[str, Any]) -> set[str]:
     """Return reviewed file paths from state."""
     return set(state.get("reviewed", []))
+
+
+def published_comment_ids(state: dict[str, Any]) -> set[str]:
+    """Return published review comment IDs from state."""
+    return set(state.get("published", []))
+
+
+def comment_id(comment: ReviewComment) -> str:
+    """Return a stable ID for a review comment."""
+    payload = {
+        "body": comment.body,
+        "path": comment.path,
+        "target_line": comment.target_line,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha1(encoded).hexdigest()
+
+
+def mark_comment_published(base: str, state: dict[str, Any], comment: ReviewComment) -> None:
+    """Persist that a review comment has been published."""
+    published = published_comment_ids(state)
+    published.add(comment_id(comment))
+    state["published"] = sorted(published)
+    save_state(base, state)
 
 
 def is_reviewed(path: str, state: dict[str, Any]) -> bool:
@@ -292,6 +332,16 @@ def collect_comments(files: Sequence[ChangedFile]) -> list[ReviewComment]:
     return comments
 
 
+def comments_by_path(files: Sequence[ChangedFile]) -> dict[str, list[ReviewComment]]:
+    """Return local review comments grouped by changed file path."""
+    comments: dict[str, list[ReviewComment]] = {}
+    for changed_file in files:
+        path_comments = comments_in_file(changed_file.path)
+        if path_comments:
+            comments[changed_file.path] = path_comments
+    return comments
+
+
 def changed_new_lines(base: str, path: str) -> set[int]:
     """Return new-side line numbers touched by the branch diff."""
     diff = git(["diff", "--unified=0", f"{base}...HEAD", "--", path])
@@ -308,13 +358,16 @@ def changed_new_lines(base: str, path: str) -> set[int]:
     return lines
 
 
+def changed_lines_by_path(base: str, paths: set[str]) -> dict[str, set[int]]:
+    """Return changed new-side line numbers keyed by file path."""
+    return {path: changed_new_lines(base, path) for path in paths}
+
+
 def print_status(base: str) -> None:
     """Print the changed-file checklist and local comments."""
     files = changed_files(base)
     state = load_state(base)
-    comments_by_path: dict[str, int] = {}
-    for comment in collect_comments(files):
-        comments_by_path[comment.path] = comments_by_path.get(comment.path, 0) + 1
+    file_comments = comments_by_path(files)
 
     if not files:
         print(f"No files changed against {base}.")
@@ -322,7 +375,7 @@ def print_status(base: str) -> None:
 
     for changed_file in files:
         checked = "x" if is_reviewed(changed_file.path, state) else " "
-        count = comments_by_path.get(changed_file.path, 0)
+        count = len(file_comments.get(changed_file.path, []))
         suffix = f" ({count} comment{'s' if count != 1 else ''})" if count else ""
         print(f"{changed_file.index:>3}. [{checked}] {changed_file.path}{suffix}")
 
@@ -348,23 +401,24 @@ def delta_command(width: int | None = None, *, paging: str = "always") -> list[s
     return command
 
 
-def diff_command(base: str, path: str) -> list[str]:
+def diff_command(base: str, path: str, branch: str | None = None) -> list[str]:
     """Return the git diff command for one file."""
+    target_branch = branch or branch_name()
     return [
         "git",
         "diff",
         "--no-ext-diff",
         f"--src-prefix={base}/",
-        f"--dst-prefix={branch_name()}/",
+        f"--dst-prefix={target_branch}/",
         f"{base}...HEAD",
         "--",
         path,
     ]
 
 
-def show_diff(base: str, path: str) -> None:
+def show_diff(base: str, path: str, branch: str | None = None) -> None:
     """Show a side-by-side diff for one file in the pager."""
-    git_command = diff_command(base, path)
+    git_command = diff_command(base, path, branch)
     delta_process = None
     git_process = subprocess.Popen(git_command, stdout=subprocess.PIPE)
     try:
@@ -377,18 +431,9 @@ def show_diff(base: str, path: str) -> None:
     git_process.wait()
 
 
-def side_by_side_diff_lines(base: str, path: str, width: int) -> list[str]:
+def side_by_side_diff_lines(base: str, path: str, width: int, branch: str | None = None) -> list[str]:
     """Return side-by-side diff lines with ANSI colors preserved."""
-    git_command = [
-        "git",
-        "diff",
-        "--no-ext-diff",
-        f"--src-prefix={base}/",
-        f"--dst-prefix={branch_name()}/",
-        f"{base}...HEAD",
-        "--",
-        path,
-    ]
+    git_command = diff_command(base, path, branch)
     git_process = subprocess.Popen(git_command, stdout=subprocess.PIPE)
     try:
         output = subprocess.check_output(
@@ -441,9 +486,30 @@ def list_comments(base: str) -> None:
         print(f"{comment.path}:{comment.target_line}{marker}: {comment.body}")
 
 
-def comments_for_path(path: str) -> list[ReviewComment]:
-    """Return comments for one path."""
-    return comments_in_file(path)
+def remote_url() -> str:
+    """Return the git remote URL used to detect the hosting provider."""
+    for remote in ("origin", "upstream"):
+        try:
+            url = subprocess.check_output(
+                ["git", "remote", "get-url", remote],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except subprocess.CalledProcessError:
+            continue
+        if url:
+            return url
+    return ""
+
+
+def detect_provider() -> str | None:
+    """Detect GitLab or GitHub from the git remote URL."""
+    url = remote_url().lower()
+    if "github" in url:
+        return "github"
+    if "gitlab" in url:
+        return "gitlab"
+    return None
 
 
 def gitlab_project_path() -> str:
@@ -477,49 +543,40 @@ def fallback_body(comment: ReviewComment) -> str:
     return f"{comment.path}:{comment.target_line}\n\n{comment.body}"
 
 
-def publish_gitlab(comments: Sequence[ReviewComment], *, dry_run: bool) -> None:
-    """Publish comments as GitLab MR discussions."""
-    project = gitlab_project_path()
-    iid = gitlab_mr_iid()
-    version = gitlab_latest_version(project, iid)
+def publish_gitlab_comment(comment: ReviewComment, project: str, iid: str, version: dict[str, Any]) -> None:
+    """Publish one comment as a GitLab MR discussion."""
+    payload = {
+        "body": comment.body,
+        "position": {
+            "position_type": "text",
+            "base_sha": version["base_commit_sha"],
+            "start_sha": version["start_commit_sha"],
+            "head_sha": version["head_commit_sha"],
+            "new_path": comment.path,
+            "old_path": comment.path,
+            "new_line": comment.target_line,
+        },
+    }
+    command = [
+        "glab",
+        "api",
+        f"projects/{project}/merge_requests/{iid}/discussions",
+        "--method",
+        "POST",
+        "--header",
+        "Content-Type: application/json",
+        "--input",
+        "-",
+    ]
+    success, output = try_run(command, input_text=json.dumps(payload))
+    if success:
+        print(f"posted gitlab {comment.path}:{comment.target_line}")
+        return
 
-    for comment in comments:
-        payload = {
-            "body": comment.body,
-            "position": {
-                "position_type": "text",
-                "base_sha": version["base_commit_sha"],
-                "start_sha": version["start_commit_sha"],
-                "head_sha": version["head_commit_sha"],
-                "new_path": comment.path,
-                "old_path": comment.path,
-                "new_line": comment.target_line,
-            },
-        }
-        if dry_run:
-            print(f"gitlab {comment.path}:{comment.target_line}: {comment.body}")
-            continue
-        command = [
-            "glab",
-            "api",
-            f"projects/{project}/merge_requests/{iid}/discussions",
-            "--method",
-            "POST",
-            "--header",
-            "Content-Type: application/json",
-            "--input",
-            "-",
-        ]
-        success, output = try_run(command, input_text=json.dumps(payload))
-        if success:
-            print(f"posted gitlab {comment.path}:{comment.target_line}")
-            continue
-
-        fallback_payload = {"body": fallback_body(comment)}
-        fallback_success, fallback_output = try_run(command, input_text=json.dumps(fallback_payload))
-        if not fallback_success:
-            die(f"could not publish GitLab comment at {comment.path}:{comment.target_line}\n{output}\n{fallback_output}")
-        print(f"posted gitlab draft fallback {comment.path}:{comment.target_line}")
+    fallback_success, fallback_output = try_run(command, input_text=json.dumps({"body": fallback_body(comment)}))
+    if not fallback_success:
+        die(f"could not publish GitLab comment at {comment.path}:{comment.target_line}\n{output}\n{fallback_output}")
+    print(f"posted gitlab draft fallback {comment.path}:{comment.target_line}")
 
 
 def github_repo() -> str:
@@ -533,71 +590,71 @@ def github_pr() -> dict[str, Any]:
     return json.loads(run(["gh", "pr", "view", "--json", "number,headRefOid"]))
 
 
-def publish_github(comments: Sequence[ReviewComment], *, dry_run: bool) -> None:
-    """Publish comments as GitHub PR review comments."""
-    repo = github_repo()
-    pr = github_pr()
-    number = str(pr["number"])
-    commit_id = str(pr["headRefOid"])
+def publish_github_comment(comment: ReviewComment, repo: str, number: str, commit_id: str) -> None:
+    """Publish one comment as a GitHub PR review comment."""
+    payload = {
+        "body": comment.body,
+        "commit_id": commit_id,
+        "path": comment.path,
+        "line": comment.target_line,
+        "side": "RIGHT",
+    }
+    command = [
+        "gh",
+        "api",
+        f"repos/{repo}/pulls/{number}/comments",
+        "--method",
+        "POST",
+        "--header",
+        "Content-Type: application/json",
+        "--input",
+        "-",
+    ]
+    success, output = try_run(command, input_text=json.dumps(payload))
+    if success:
+        print(f"posted github {comment.path}:{comment.target_line}")
+        return
 
-    for comment in comments:
-        payload = {
-            "body": comment.body,
-            "commit_id": commit_id,
-            "path": comment.path,
-            "line": comment.target_line,
-            "side": "RIGHT",
-        }
-        if dry_run:
-            print(f"github {comment.path}:{comment.target_line}: {comment.body}")
-            continue
-        command = [
-            "gh",
-            "api",
-            f"repos/{repo}/pulls/{number}/comments",
-            "--method",
-            "POST",
-            "--header",
-            "Content-Type: application/json",
-            "--input",
-            "-",
-        ]
-        success, output = try_run(command, input_text=json.dumps(payload))
-        if success:
-            print(f"posted github {comment.path}:{comment.target_line}")
-            continue
-
-        fallback_command = [
-            "gh",
-            "api",
-            f"repos/{repo}/issues/{number}/comments",
-            "--method",
-            "POST",
-            "--header",
-            "Content-Type: application/json",
-            "--input",
-            "-",
-        ]
-        fallback_success, fallback_output = try_run(
-            fallback_command,
-            input_text=json.dumps({"body": fallback_body(comment)}),
-        )
-        if not fallback_success:
-            die(f"could not publish GitHub comment at {comment.path}:{comment.target_line}\n{output}\n{fallback_output}")
-        print(f"posted github draft fallback {comment.path}:{comment.target_line}")
+    fallback_command = [
+        "gh",
+        "api",
+        f"repos/{repo}/issues/{number}/comments",
+        "--method",
+        "POST",
+        "--header",
+        "Content-Type: application/json",
+        "--input",
+        "-",
+    ]
+    fallback_success, fallback_output = try_run(
+        fallback_command,
+        input_text=json.dumps({"body": fallback_body(comment)}),
+    )
+    if not fallback_success:
+        die(f"could not publish GitHub comment at {comment.path}:{comment.target_line}\n{output}\n{fallback_output}")
+    print(f"posted github draft fallback {comment.path}:{comment.target_line}")
 
 
 def publish_comments(base: str, provider: str, dry_run: bool) -> None:
     """Publish local review comments to a provider."""
     files = changed_files(base)
-    comments = collect_comments(files)
-    if not comments:
+    all_comments = collect_comments(files)
+    if not all_comments:
         print("No #review comments found.")
         return
 
-    bad_comments = [
-        comment for comment in comments if comment.target_line not in changed_new_lines(base, comment.path)
-    ]
+    state = load_state(base)
+    published = published_comment_ids(state)
+    comments = [comment for comment in all_comments if comment_id(comment) not in published]
+    skipped = len(all_comments) - len(comments)
+    if skipped:
+        print(f"Skipping {skipped} already published comment{'s' if skipped != 1 else ''}.")
+    if not comments:
+        print("No unpublished #review comments found.")
+        return
+
+    lines_by_path = changed_lines_by_path(base, {comment.path for comment in comments})
+    bad_comments = [comment for comment in comments if comment.target_line not in lines_by_path[comment.path]]
     if bad_comments:
         print("These comments do not point at changed lines and may be rejected:")
         for comment in bad_comments:
@@ -605,10 +662,26 @@ def publish_comments(base: str, provider: str, dry_run: bool) -> None:
         if not dry_run:
             die("move comments onto changed lines or run with --dry-run to inspect")
 
+    if dry_run:
+        for comment in comments:
+            print(f"{provider} {comment.path}:{comment.target_line}: {comment.body}")
+        return
+
     if provider == "gitlab":
-        publish_gitlab(comments, dry_run=dry_run)
+        project = gitlab_project_path()
+        iid = gitlab_mr_iid()
+        version = gitlab_latest_version(project, iid)
+        for comment in comments:
+            publish_gitlab_comment(comment, project, iid, version)
+            mark_comment_published(base, state, comment)
     elif provider == "github":
-        publish_github(comments, dry_run=dry_run)
+        repo = github_repo()
+        pr = github_pr()
+        number = str(pr["number"])
+        commit_id = str(pr["headRefOid"])
+        for comment in comments:
+            publish_github_comment(comment, repo, number, commit_id)
+            mark_comment_published(base, state, comment)
     else:
         die(f"unsupported provider: {provider}")
 
@@ -646,7 +719,10 @@ def load_theme(theme_name: str) -> dict[str, tuple[int, int, int]]:
     theme = dict(THEMES["dracula"])
     for name, value in raw_theme.items():
         if isinstance(value, str):
-            theme[name] = hex_to_rgb(value)
+            try:
+                theme[name] = hex_to_rgb(value)
+            except ValueError:
+                continue
     return theme
 
 
@@ -786,7 +862,7 @@ def parse_ansi_line(line: str) -> list[StyledSegment]:
                     reverse = False
                 elif code == 39:
                     color = theme_color("foreground")
-                elif code in {*range(30, 38), *range(90, 98)}:
+                elif code in BASIC_ANSI_COLOR_CODES:
                     color = ansi_basic_color(code)
                 elif code == 38 and index + 2 < len(codes) and codes[index + 1] == 5:
                     color = ansi_256_to_color(codes[index + 2])
@@ -807,11 +883,6 @@ def visible_length(segments: Sequence[StyledSegment]) -> int:
     return sum(len(segment.text) for segment in segments)
 
 
-def strip_ansi(text: str) -> str:
-    """Return text without ANSI escape sequences."""
-    return ANSI_RE.sub("", text)
-
-
 def add_styled_text(
     window: curses.window,
     y: int,
@@ -830,13 +901,6 @@ def add_styled_text(
             mode |= curses.A_BOLD
         add_text(window, y, x + used, text, width - used, mode)
         used += len(text)
-
-
-def status_message(window: curses.window, message: str) -> None:
-    """Draw a one-line status message."""
-    height, width = window.getmaxyx()
-    add_text(window, height - 1, 0, message.ljust(width), width, curses.A_REVERSE)
-    window.refresh()
 
 
 def prompt(window: curses.window, label: str) -> str | None:
@@ -870,6 +934,19 @@ def prompt(window: curses.window, label: str) -> str | None:
         curses.curs_set(0)
 
 
+def confirm_publish(window: curses.window, provider: str) -> bool | None:
+    """Return whether to publish for real, or None when cancelled."""
+    height, width = window.getmaxyx()
+    window.move(height - 1, 0)
+    window.clrtoeol()
+    add_text(window, height - 1, 0, f"{provider}: y publish, any other key dry-run, Esc cancel", width)
+    window.refresh()
+    key = window.getch()
+    if key == 27:
+        return None
+    return key in {ord("y"), ord("Y")}
+
+
 class ReviewApp:
     """Full-screen review2 terminal UI."""
 
@@ -877,8 +954,11 @@ class ReviewApp:
         """Create the TUI app."""
         self.screen = screen
         self.base = base
+        self.branch = branch_name()
         self.files: list[ChangedFile] = []
         self.state: dict[str, Any] = {}
+        self.reviewed: set[str] = set()
+        self.comments_by_path: dict[str, list[ReviewComment]] = {}
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
@@ -902,9 +982,9 @@ class ReviewApp:
         """Return changed files matching the active regex search."""
         files = self.files
         if self.file_filter == "checked":
-            files = [changed_file for changed_file in files if is_reviewed(changed_file.path, self.state)]
+            files = [changed_file for changed_file in files if changed_file.path in self.reviewed]
         elif self.file_filter == "unchecked":
-            files = [changed_file for changed_file in files if not is_reviewed(changed_file.path, self.state)]
+            files = [changed_file for changed_file in files if changed_file.path not in self.reviewed]
 
         if not self.search_query:
             self.search_error = ""
@@ -921,6 +1001,8 @@ class ReviewApp:
         """Reload files, state, and clear stale diff cache."""
         self.files = changed_files(self.base)
         self.state = load_state(self.base)
+        self.reviewed = reviewed_paths(self.state)
+        self.comments_by_path = comments_by_path(self.files)
         self.selected = max(0, min(self.selected, max(0, len(self.visible_files()) - 1)))
         self.diff_cache.clear()
 
@@ -1038,6 +1120,7 @@ class ReviewApp:
             return
         toggle_reviewed(self.base, current.path)
         self.state = load_state(self.base)
+        self.reviewed = reviewed_paths(self.state)
         self.message = f"Toggled {current.path}."
 
     def edit_current(self) -> None:
@@ -1054,24 +1137,20 @@ class ReviewApp:
         current = self.selected_file()
         if current is None:
             return
-        self.suspend(lambda: show_diff(self.base, current.path))
+        self.suspend(lambda: show_diff(self.base, current.path, self.branch))
         self.message = f"Viewed diff for {current.path}."
 
     def publish_dry_run(self) -> None:
         """Publish or dry-run comments outside curses."""
-        provider_input = prompt(self.screen, "provider [gitlab/github]: ")
-        if provider_input is None:
+        provider = detect_provider()
+        if provider is None:
+            self.message = "Publish cancelled: could not detect GitLab/GitHub remote."
+            return
+        publish_for_real = confirm_publish(self.screen, provider)
+        if publish_for_real is None:
             self.message = "Publish cancelled."
             return
-        provider = provider_input.lower() or "gitlab"
-        if provider not in {"gitlab", "github"}:
-            self.message = "Publish cancelled: provider must be gitlab or github."
-            return
-        confirmation = prompt(self.screen, "type yes to publish for real, anything else for dry-run: ")
-        if confirmation is None:
-            self.message = "Publish cancelled."
-            return
-        dry_run = confirmation != "yes"
+        dry_run = not publish_for_real
         self.suspend(lambda: publish_comments(self.base, provider, dry_run=dry_run), wait=True)
         mode = "dry-run" if dry_run else "publish"
         self.message = f"{provider} {mode} finished."
@@ -1132,7 +1211,7 @@ class ReviewApp:
 
     def draw_header(self, width: int) -> None:
         """Draw the app header."""
-        title = f" review2  {branch_name()} against {self.base} "
+        title = f" review2  {self.branch} against {self.base} "
         add_text(self.screen, 0, 0, title.ljust(width), width, curses.A_BOLD | color_pair(theme_color("purple")))
 
     def draw_files(self, y: int, x: int, height: int, width: int) -> None:
@@ -1140,23 +1219,19 @@ class ReviewApp:
         files = self.visible_files()
         search_label = self.search_query or ""
         search_prefix = "search>" if self.search_active else "search"
-        title = f"Files  filter:{self.file_filter}  {search_prefix} /{search_label}/  {len(files)}/{len(self.files)}"
+        title_prefix = f"Files  filter:{self.file_filter}  {search_prefix} /"
+        title = f"{title_prefix}{search_label}/  {len(files)}/{len(self.files)}"
         if self.search_error:
-            title = f"Files  filter:{self.file_filter}  {search_prefix} /{search_label}/  regex error: {self.search_error}"
+            title = f"{title_prefix}{search_label}/  regex error: {self.search_error}"
         add_text(self.screen, y, x, title.ljust(width), width, curses.A_BOLD | color_pair(theme_color("cyan")))
         if self.search_active:
-            cursor_x = min(width - 1, len(f"Files  {search_prefix} /{search_label}"))
+            cursor_x = min(width - 1, len(title_prefix) + len(search_label))
             self.search_cursor = (y, x + cursor_x)
         visible_height = max(1, height - 1)
         if self.selected < self.file_scroll:
             self.file_scroll = self.selected
         if self.selected >= self.file_scroll + visible_height:
             self.file_scroll = self.selected - visible_height + 1
-
-        comments = collect_comments(self.files)
-        comment_counts: dict[str, int] = {}
-        for comment in comments:
-            comment_counts[comment.path] = comment_counts.get(comment.path, 0) + 1
 
         for row in range(visible_height):
             index = self.file_scroll + row
@@ -1165,8 +1240,8 @@ class ReviewApp:
                 add_text(self.screen, line_y, x, " ".ljust(width), width)
                 continue
             changed_file = files[index]
-            checked = "x" if is_reviewed(changed_file.path, self.state) else " "
-            count = comment_counts.get(changed_file.path, 0)
+            checked = "x" if changed_file.path in self.reviewed else " "
+            count = len(self.comments_by_path.get(changed_file.path, []))
             suffix = f" ({count})" if count else ""
             label = f"[{checked}] {changed_file.path}{suffix}"
             color = theme_color("green") if checked == "x" else theme_color("foreground")
@@ -1186,7 +1261,7 @@ class ReviewApp:
 
         cache_key = (current.path, width)
         if cache_key not in self.diff_cache:
-            self.diff_cache[cache_key] = side_by_side_diff_lines(self.base, current.path, width)
+            self.diff_cache[cache_key] = side_by_side_diff_lines(self.base, current.path, width, self.branch)
         lines = self.diff_cache[cache_key]
         max_scroll = max(0, len(lines) - height + 1)
         self.diff_scroll = max(0, min(self.diff_scroll, max_scroll))
@@ -1206,7 +1281,7 @@ class ReviewApp:
         add_text(self.screen, y, x, "Comments".ljust(width), width, curses.A_BOLD | color_pair(theme_color("cyan")))
         if current is None:
             return
-        comments = comments_for_path(current.path)
+        comments = self.comments_by_path.get(current.path, [])
         if not comments:
             add_text(self.screen, y + 1, x, "No #review comments in this file.", width)
             return
@@ -1240,7 +1315,7 @@ def parser() -> argparse.ArgumentParser:
     toggle_parser.add_argument("file", help="changed file path or list number")
 
     publish_parser = subparsers.add_parser("publish", help="publish #review comments to a merge/pull request")
-    publish_parser.add_argument("--provider", choices=["gitlab", "github"], default="gitlab")
+    publish_parser.add_argument("--provider", choices=["auto", "gitlab", "github"], default="auto")
     publish_parser.add_argument("--dry-run", action="store_true")
 
     return argument_parser
@@ -1284,7 +1359,10 @@ def main() -> None:
     elif args.command == "toggle":
         toggle_reviewed(base, resolve_path(changed_files(base), args.file))
     elif args.command == "publish":
-        publish_comments(base, args.provider, args.dry_run)
+        provider = detect_provider() if args.provider == "auto" else args.provider
+        if provider is None:
+            die("could not detect provider from git remote; pass --provider gitlab or --provider github")
+        publish_comments(base, provider, args.dry_run)
 
 
 if __name__ == "__main__":
