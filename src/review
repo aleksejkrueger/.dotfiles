@@ -28,6 +28,13 @@ Useful keys in the UI:
 - o opens the current GitLab MR or GitHub PR in the browser.
 - p publishes local #review markers, with output shown in a popup.
 
+Editor selection for c/e and the edit subcommand follows normal shell defaults:
+VISUAL is used first, then EDITOR, then nvim. Examples:
+- VISUAL=zed review
+- VISUAL="zed --wait" review
+- VISUAL="code --wait" review
+- EDITOR=vim review
+
 For a lightweight picker instead of the full TUI, run "review --fast". It opens
 fzf with a delta-powered preview above the file list and respects --base.
 """
@@ -625,8 +632,14 @@ def side_by_side_diff_lines(base: str, path: str, width: int, branch: str | None
 
 def open_file(path: str) -> None:
     """Open a file in the configured editor."""
+    call(editor_command(path))
+
+
+def editor_command(path: str) -> list[str]:
+    """Return the configured editor command with a file path appended."""
     editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nvim"
-    call([editor, path])
+    command = shlex.split(editor)
+    return [*command, path] if command else ["nvim", path]
 
 
 def resolve_path(files: Sequence[ChangedFile], value: str) -> str:
