@@ -1,0 +1,1291 @@
+#!/usr/bin/env python3
+"""CLI review helper with file checklist state and publishable inline comments."""
+
+from __future__ import annotations
+
+import argparse
+import curses
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Sequence
+from urllib.parse import quote
+
+
+REVIEW_MARKER_RE = re.compile(r"(?P<prefix>#|//|--|;|/\*|\*)\s*review\b:?\s*(?P<body>.*)$", re.IGNORECASE)
+LEGACY_MARKER_RE = re.compile(r"\bREVIEW2:\s*(?P<body>.*)$")
+MARKER_RE = re.compile(r"(?:#|//|--|;|/\*|\*)\s*review\b:?.*$|\bREVIEW2:\s*.*$", re.IGNORECASE)
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+HELP_TEXT = (
+    "/ search  f filter  j/k move  J/K scroll  Space toggle  c/e edit  d pager  p publish  "
+    "r refresh  q quit"
+)
+FILE_FILTERS = ("all", "unchecked", "checked")
+DRACULA_ANSI_COLORS = {
+    "foreground": 15,
+    "comment": 4,
+    "cyan": 6,
+    "green": 2,
+    "orange": 3,
+    "pink": 5,
+    "purple": 5,
+    "red": 1,
+    "yellow": 3,
+}
+
+
+@dataclass(frozen=True)
+class ChangedFile:
+    """A file changed against the selected base ref."""
+
+    index: int
+    path: str
+
+
+@dataclass(frozen=True)
+class ReviewComment:
+    """A local inline review comment marker."""
+
+    path: str
+    marker_line: int
+    target_line: int
+    body: str
+
+
+@dataclass(frozen=True)
+class StyledSegment:
+    """A text segment with optional terminal styling."""
+
+    text: str
+    color: int = -1
+    bold: bool = False
+    reverse: bool = False
+
+
+THEMES = {
+    "dracula": {
+        "foreground": (248, 248, 242),
+        "comment": (98, 114, 164),
+        "cyan": (139, 233, 253),
+        "green": (80, 250, 123),
+        "orange": (255, 184, 108),
+        "pink": (255, 121, 198),
+        "purple": (189, 147, 249),
+        "red": (255, 85, 85),
+        "yellow": (241, 250, 140),
+    },
+}
+ACTIVE_THEME: dict[str, tuple[int, int, int]] = THEMES["dracula"]
+COLOR_PAIR_CACHE: dict[tuple[int, bool], int] = {}
+THEME_COLOR_NUMBERS: dict[str, int] = {}
+
+
+def die(message: str) -> None:
+    """Print an error message and exit with status 1."""
+    print(f"review2: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def run(command: Sequence[str], *, input_text: str | None = None) -> str:
+    """Run a command and return stdout."""
+    try:
+        return subprocess.check_output(
+            list(command),
+            input=input_text,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError:
+        die(f"missing dependency: {command[0]}")
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() or f"command failed: {shlex.join(command)}"
+        die(detail)
+
+
+def try_run(command: Sequence[str], *, input_text: str | None = None) -> tuple[bool, str]:
+    """Run a command and return success plus output without exiting."""
+    try:
+        output = subprocess.check_output(
+            list(command),
+            input=input_text,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False, f"missing dependency: {command[0]}"
+    except subprocess.CalledProcessError as error:
+        return False, error.output.strip() or f"command failed: {shlex.join(command)}"
+    return True, output
+
+
+def call(command: Sequence[str], *, input_text: str | None = None) -> int:
+    """Run a command and return its exit code."""
+    try:
+        return subprocess.run(list(command), input=input_text, text=True, check=False).returncode
+    except FileNotFoundError:
+        die(f"missing dependency: {command[0]}")
+
+
+def git(args: Sequence[str]) -> str:
+    """Run git and return stdout."""
+    return run(["git", *args])
+
+
+def git_dir() -> Path:
+    """Return the repository git directory."""
+    return Path(git(["rev-parse", "--git-dir"]).strip())
+
+
+def branch_name() -> str:
+    """Return the current branch name, falling back to HEAD."""
+    branch = git(["branch", "--show-current"]).strip()
+    return branch or "HEAD"
+
+
+def default_base() -> str:
+    """Return the repository default comparison base."""
+    for ref in ("origin/HEAD", "main", "master"):
+        try:
+            output = subprocess.check_output(
+                ["git", "rev-parse", "--verify", "--quiet", "--abbrev-ref", ref],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except subprocess.CalledProcessError:
+            continue
+        if output:
+            return output.removeprefix("origin/")
+    return "main"
+
+
+def verify_base(base: str) -> None:
+    """Fail if the base ref does not exist."""
+    git(["rev-parse", "--verify", "--quiet", base])
+
+
+def safe_name(value: str) -> str:
+    """Return a filesystem-safe name."""
+    return "".join(character if character.isalnum() else "-" for character in value)
+
+
+def review_root(base: str) -> Path:
+    """Return the private state directory for this branch review."""
+    return git_dir() / "review2" / f"{safe_name(base)}...{safe_name(branch_name())}"
+
+
+def state_file(base: str) -> Path:
+    """Return the JSON state file for this branch review."""
+    return review_root(base) / "state.json"
+
+
+def load_state(base: str) -> dict[str, Any]:
+    """Load review state."""
+    path = state_file(base)
+    if not path.exists():
+        return {"reviewed": []}
+    with path.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def save_state(base: str, state: dict[str, Any]) -> None:
+    """Save review state."""
+    path = state_file(base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def changed_files(base: str) -> list[ChangedFile]:
+    """Return files changed between base and HEAD."""
+    output = subprocess.check_output(
+        ["git", "diff", "--name-only", "-z", f"{base}...HEAD"],
+        stderr=subprocess.PIPE,
+    )
+    paths = [path.decode() for path in output.split(b"\0") if path]
+    return [ChangedFile(index=index, path=path) for index, path in enumerate(paths, 1)]
+
+
+def reviewed_paths(state: dict[str, Any]) -> set[str]:
+    """Return reviewed file paths from state."""
+    return set(state.get("reviewed", []))
+
+
+def is_reviewed(path: str, state: dict[str, Any]) -> bool:
+    """Return whether a file is marked reviewed."""
+    return path in reviewed_paths(state)
+
+
+def toggle_reviewed(base: str, path: str) -> None:
+    """Toggle the reviewed checkbox for a file."""
+    state = load_state(base)
+    reviewed = reviewed_paths(state)
+    if path in reviewed:
+        reviewed.remove(path)
+    else:
+        reviewed.add(path)
+    state["reviewed"] = sorted(reviewed)
+    save_state(base, state)
+
+
+def marker_only(line: str) -> bool:
+    """Return whether a line only contains a review marker in a comment."""
+    return REVIEW_MARKER_RE.match(line.strip()) is not None or LEGACY_MARKER_RE.match(line.strip()) is not None
+
+
+def next_code_line(lines: list[str], start_index: int) -> int:
+    """Return the next non-empty non-marker line number after a marker."""
+    for index in range(start_index + 1, len(lines)):
+        line = lines[index]
+        if line.strip() and not MARKER_RE.search(line):
+            return index + 1
+    return start_index + 1
+
+
+def adjusted_target_line(lines: list[str], marker_index: int) -> int:
+    """Return the target line adjusted for local standalone marker lines."""
+    line = lines[marker_index]
+    raw_target = next_code_line(lines, marker_index) if marker_only(line) else marker_index + 1
+    local_marker_lines = sum(
+        1
+        for line_number, current_line in enumerate(lines[:raw_target], 1)
+        if line_number <= raw_target and MARKER_RE.search(current_line) and marker_only(current_line)
+    )
+    return max(1, raw_target - local_marker_lines)
+
+
+def comments_in_file(path: str) -> list[ReviewComment]:
+    """Return review comments found in one file."""
+    file_path = Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        return []
+
+    lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    comments: list[ReviewComment] = []
+    for index, line in enumerate(lines):
+        match = REVIEW_MARKER_RE.search(line) or LEGACY_MARKER_RE.search(line)
+        if match is None:
+            continue
+        body = match.group("body").strip()
+        if body:
+            comments.append(
+                ReviewComment(
+                    path=path,
+                    marker_line=index + 1,
+                    target_line=adjusted_target_line(lines, index),
+                    body=body,
+                )
+            )
+    return comments
+
+
+def collect_comments(files: Sequence[ChangedFile]) -> list[ReviewComment]:
+    """Return all local review comments in changed files."""
+    comments: list[ReviewComment] = []
+    for changed_file in files:
+        comments.extend(comments_in_file(changed_file.path))
+    return comments
+
+
+def changed_new_lines(base: str, path: str) -> set[int]:
+    """Return new-side line numbers touched by the branch diff."""
+    diff = git(["diff", "--unified=0", f"{base}...HEAD", "--", path])
+    lines: set[int] = set()
+    for line in diff.splitlines():
+        if not line.startswith("@@"):
+            continue
+        match = re.search(r"\+(\d+)(?:,(\d+))?", line)
+        if match is None:
+            continue
+        start = int(match.group(1))
+        count = int(match.group(2) or "1")
+        lines.update(range(start, start + count))
+    return lines
+
+
+def print_status(base: str) -> None:
+    """Print the changed-file checklist and local comments."""
+    files = changed_files(base)
+    state = load_state(base)
+    comments_by_path: dict[str, int] = {}
+    for comment in collect_comments(files):
+        comments_by_path[comment.path] = comments_by_path.get(comment.path, 0) + 1
+
+    if not files:
+        print(f"No files changed against {base}.")
+        return
+
+    for changed_file in files:
+        checked = "x" if is_reviewed(changed_file.path, state) else " "
+        count = comments_by_path.get(changed_file.path, 0)
+        suffix = f" ({count} comment{'s' if count != 1 else ''})" if count else ""
+        print(f"{changed_file.index:>3}. [{checked}] {changed_file.path}{suffix}")
+
+
+def delta_command(width: int | None = None, *, paging: str = "always") -> list[str]:
+    """Return the delta command used for review diffs."""
+    command = [
+        "delta",
+        f"--paging={paging}",
+        "--side-by-side",
+        "--syntax-theme=Dracula",
+        "--line-numbers",
+        "--line-numbers-plus-style=#50fa7b #1f3a2a",
+        "--line-numbers-minus-style=#ff5555 #4a1f2b",
+        "--plus-style=syntax #1f3a2a",
+        "--minus-style=syntax #4a1f2b",
+        "--plus-emph-style=syntax bold #1f3a2a",
+        "--minus-emph-style=syntax bold #4a1f2b",
+        "--keep-plus-minus-markers",
+    ]
+    if width is not None and width > 0:
+        command.append(f"--width={width}")
+    return command
+
+
+def diff_command(base: str, path: str) -> list[str]:
+    """Return the git diff command for one file."""
+    return [
+        "git",
+        "diff",
+        "--no-ext-diff",
+        f"--src-prefix={base}/",
+        f"--dst-prefix={branch_name()}/",
+        f"{base}...HEAD",
+        "--",
+        path,
+    ]
+
+
+def show_diff(base: str, path: str) -> None:
+    """Show a side-by-side diff for one file in the pager."""
+    git_command = diff_command(base, path)
+    delta_process = None
+    git_process = subprocess.Popen(git_command, stdout=subprocess.PIPE)
+    try:
+        delta_process = subprocess.Popen(delta_command(), stdin=git_process.stdout)
+    except FileNotFoundError:
+        die("missing dependency: delta")
+    if git_process.stdout is not None:
+        git_process.stdout.close()
+    delta_process.wait()
+    git_process.wait()
+
+
+def side_by_side_diff_lines(base: str, path: str, width: int) -> list[str]:
+    """Return side-by-side diff lines with ANSI colors preserved."""
+    git_command = [
+        "git",
+        "diff",
+        "--no-ext-diff",
+        f"--src-prefix={base}/",
+        f"--dst-prefix={branch_name()}/",
+        f"{base}...HEAD",
+        "--",
+        path,
+    ]
+    git_process = subprocess.Popen(git_command, stdout=subprocess.PIPE)
+    try:
+        output = subprocess.check_output(
+            delta_command(width, paging="never"),
+            stdin=git_process.stdout,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        output = run(["git", "diff", "--no-color", f"{base}...HEAD", "--", path])
+    finally:
+        if git_process.stdout is not None:
+            git_process.stdout.close()
+        git_process.wait()
+
+    lines = [line.replace("\t", "    ") for line in output.splitlines()]
+    return lines or ["No diff for this file."]
+
+
+def open_file(path: str) -> None:
+    """Open a file in the configured editor."""
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nvim"
+    call([editor, path])
+
+
+def resolve_path(files: Sequence[ChangedFile], value: str) -> str:
+    """Resolve a file index or path."""
+    if value.isdigit():
+        wanted = int(value)
+        for changed_file in files:
+            if changed_file.index == wanted:
+                return changed_file.path
+    paths = {changed_file.path for changed_file in files}
+    if value in paths:
+        return value
+    die(f"not a changed file: {value}")
+
+
+def list_comments(base: str) -> None:
+    """Print local review comments."""
+    files = changed_files(base)
+    comments = collect_comments(files)
+    if not comments:
+        print("No #review comments found.")
+        return
+
+    for comment in comments:
+        changed_lines = changed_new_lines(base, comment.path)
+        marker = "" if comment.target_line in changed_lines else " [not in diff]"
+        print(f"{comment.path}:{comment.target_line}{marker}: {comment.body}")
+
+
+def comments_for_path(path: str) -> list[ReviewComment]:
+    """Return comments for one path."""
+    return comments_in_file(path)
+
+
+def gitlab_project_path() -> str:
+    """Return the GitLab project path from glab."""
+    data = json.loads(run(["glab", "repo", "view", "--output", "json"]))
+    path = data.get("full_name") or data.get("fullName") or data.get("path_with_namespace")
+    if not path:
+        die("could not detect GitLab project path")
+    return quote(str(path), safe="")
+
+
+def gitlab_mr_iid() -> str:
+    """Return the current branch merge request IID."""
+    data = json.loads(run(["glab", "mr", "view", "--output", "json"]))
+    iid = data.get("iid") or data.get("Iid") or data.get("number")
+    if not iid:
+        die("could not detect GitLab merge request")
+    return str(iid)
+
+
+def gitlab_latest_version(project: str, iid: str) -> dict[str, Any]:
+    """Return the latest GitLab MR version metadata."""
+    versions = json.loads(run(["glab", "api", f"projects/{project}/merge_requests/{iid}/versions"]))
+    if not versions:
+        die("GitLab merge request has no diff versions")
+    return versions[0]
+
+
+def fallback_body(comment: ReviewComment) -> str:
+    """Return a general discussion body for providers that reject positioned comments."""
+    return f"{comment.path}:{comment.target_line}\n\n{comment.body}"
+
+
+def publish_gitlab(comments: Sequence[ReviewComment], *, dry_run: bool) -> None:
+    """Publish comments as GitLab MR discussions."""
+    project = gitlab_project_path()
+    iid = gitlab_mr_iid()
+    version = gitlab_latest_version(project, iid)
+
+    for comment in comments:
+        payload = {
+            "body": comment.body,
+            "position": {
+                "position_type": "text",
+                "base_sha": version["base_commit_sha"],
+                "start_sha": version["start_commit_sha"],
+                "head_sha": version["head_commit_sha"],
+                "new_path": comment.path,
+                "old_path": comment.path,
+                "new_line": comment.target_line,
+            },
+        }
+        if dry_run:
+            print(f"gitlab {comment.path}:{comment.target_line}: {comment.body}")
+            continue
+        command = [
+            "glab",
+            "api",
+            f"projects/{project}/merge_requests/{iid}/discussions",
+            "--method",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--input",
+            "-",
+        ]
+        success, output = try_run(command, input_text=json.dumps(payload))
+        if success:
+            print(f"posted gitlab {comment.path}:{comment.target_line}")
+            continue
+
+        fallback_payload = {"body": fallback_body(comment)}
+        fallback_success, fallback_output = try_run(command, input_text=json.dumps(fallback_payload))
+        if not fallback_success:
+            die(f"could not publish GitLab comment at {comment.path}:{comment.target_line}\n{output}\n{fallback_output}")
+        print(f"posted gitlab draft fallback {comment.path}:{comment.target_line}")
+
+
+def github_repo() -> str:
+    """Return the GitHub owner/repo name."""
+    data = json.loads(run(["gh", "repo", "view", "--json", "nameWithOwner"]))
+    return str(data["nameWithOwner"])
+
+
+def github_pr() -> dict[str, Any]:
+    """Return the current branch pull request metadata."""
+    return json.loads(run(["gh", "pr", "view", "--json", "number,headRefOid"]))
+
+
+def publish_github(comments: Sequence[ReviewComment], *, dry_run: bool) -> None:
+    """Publish comments as GitHub PR review comments."""
+    repo = github_repo()
+    pr = github_pr()
+    number = str(pr["number"])
+    commit_id = str(pr["headRefOid"])
+
+    for comment in comments:
+        payload = {
+            "body": comment.body,
+            "commit_id": commit_id,
+            "path": comment.path,
+            "line": comment.target_line,
+            "side": "RIGHT",
+        }
+        if dry_run:
+            print(f"github {comment.path}:{comment.target_line}: {comment.body}")
+            continue
+        command = [
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{number}/comments",
+            "--method",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--input",
+            "-",
+        ]
+        success, output = try_run(command, input_text=json.dumps(payload))
+        if success:
+            print(f"posted github {comment.path}:{comment.target_line}")
+            continue
+
+        fallback_command = [
+            "gh",
+            "api",
+            f"repos/{repo}/issues/{number}/comments",
+            "--method",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--input",
+            "-",
+        ]
+        fallback_success, fallback_output = try_run(
+            fallback_command,
+            input_text=json.dumps({"body": fallback_body(comment)}),
+        )
+        if not fallback_success:
+            die(f"could not publish GitHub comment at {comment.path}:{comment.target_line}\n{output}\n{fallback_output}")
+        print(f"posted github draft fallback {comment.path}:{comment.target_line}")
+
+
+def publish_comments(base: str, provider: str, dry_run: bool) -> None:
+    """Publish local review comments to a provider."""
+    files = changed_files(base)
+    comments = collect_comments(files)
+    if not comments:
+        print("No #review comments found.")
+        return
+
+    bad_comments = [
+        comment for comment in comments if comment.target_line not in changed_new_lines(base, comment.path)
+    ]
+    if bad_comments:
+        print("These comments do not point at changed lines and may be rejected:")
+        for comment in bad_comments:
+            print(f"- {comment.path}:{comment.target_line}: {comment.body}")
+        if not dry_run:
+            die("move comments onto changed lines or run with --dry-run to inspect")
+
+    if provider == "gitlab":
+        publish_gitlab(comments, dry_run=dry_run)
+    elif provider == "github":
+        publish_github(comments, dry_run=dry_run)
+    else:
+        die(f"unsupported provider: {provider}")
+
+
+def add_text(window: curses.window, y: int, x: int, text: str, width: int, mode: int = 0) -> None:
+    """Draw clipped text if it fits inside a curses window."""
+    if width <= 0:
+        return
+    try:
+        window.addnstr(y, x, text, width, mode)
+    except curses.error:
+        pass
+
+
+def hex_to_rgb(value: str) -> tuple[int, int, int]:
+    """Convert a hex color string to an RGB tuple."""
+    normalized = value.strip().removeprefix("#")
+    if len(normalized) != 6:
+        raise ValueError(value)
+    return (int(normalized[0:2], 16), int(normalized[2:4], 16), int(normalized[4:6], 16))
+
+
+def load_theme(theme_name: str) -> dict[str, tuple[int, int, int]]:
+    """Load a built-in or user theme."""
+    if theme_name in THEMES:
+        return THEMES[theme_name]
+
+    theme_path = Path.home() / ".config" / "review2" / "themes" / f"{theme_name}.json"
+    if not theme_path.exists():
+        return THEMES["dracula"]
+
+    with theme_path.open(encoding="utf-8") as handle:
+        raw_theme = json.load(handle)
+
+    theme = dict(THEMES["dracula"])
+    for name, value in raw_theme.items():
+        if isinstance(value, str):
+            theme[name] = hex_to_rgb(value)
+    return theme
+
+
+def init_theme(theme_name: str) -> None:
+    """Initialize transparent-background color pairs for the TUI."""
+    global ACTIVE_THEME
+
+    ACTIVE_THEME = load_theme(theme_name)
+    COLOR_PAIR_CACHE.clear()
+    THEME_COLOR_NUMBERS.clear()
+    if not curses.has_colors():
+        return
+
+    curses.start_color()
+    try:
+        curses.use_default_colors()
+    except curses.error:
+        pass
+
+    can_define_colors = curses.can_change_color() and curses.COLORS > 32
+    start_color = 16
+    for offset, (name, rgb) in enumerate(ACTIVE_THEME.items()):
+        color_number = start_color + offset
+        if can_define_colors and color_number < curses.COLORS:
+            try:
+                curses.init_color(color_number, *(round(channel / 255 * 1000) for channel in rgb))
+                THEME_COLOR_NUMBERS[name] = color_number
+            except curses.error:
+                THEME_COLOR_NUMBERS[name] = DRACULA_ANSI_COLORS.get(name, 7)
+        else:
+            THEME_COLOR_NUMBERS[name] = DRACULA_ANSI_COLORS.get(name, 7)
+
+
+def theme_color(name: str) -> int:
+    """Return a curses color number from the active theme."""
+    return THEME_COLOR_NUMBERS.get(name, -1)
+
+
+def color_pair(color: int, reverse: bool = False) -> int:
+    """Return a curses color pair using the terminal default background."""
+    if color < 0 or not curses.has_colors():
+        return curses.A_REVERSE if reverse else 0
+
+    key = (color, reverse)
+    if key not in COLOR_PAIR_CACHE:
+        pair_number = len(COLOR_PAIR_CACHE) + 1
+        if pair_number >= curses.COLOR_PAIRS:
+            return curses.A_REVERSE if reverse else 0
+        background = color if reverse else -1
+        foreground = -1 if reverse else color
+        try:
+            curses.init_pair(pair_number, foreground, background)
+        except curses.error:
+            return curses.A_REVERSE if reverse else 0
+        COLOR_PAIR_CACHE[key] = pair_number
+    return curses.color_pair(COLOR_PAIR_CACHE[key])
+
+
+def nearest_theme_color(red: int, green: int, blue: int) -> int:
+    """Return the closest active theme color for an RGB value."""
+    if not THEME_COLOR_NUMBERS:
+        return -1
+
+    closest_name = min(
+        THEME_COLOR_NUMBERS,
+        key=lambda name: sum((ACTIVE_THEME[name][index] - value) ** 2 for index, value in enumerate((red, green, blue))),
+    )
+    return THEME_COLOR_NUMBERS[closest_name]
+
+
+def ansi_256_to_color(value: int) -> int:
+    """Map a 256-color ANSI value to a curses color number."""
+    if 232 <= value <= 255:
+        level = 8 + (value - 232) * 10
+        return nearest_theme_color(level, level, level)
+    if 16 <= value <= 255:
+        red_index = (value - 16) // 36
+        green_index = ((value - 16) % 36) // 6
+        blue_index = (value - 16) % 6
+        steps = [0, 95, 135, 175, 215, 255]
+        return nearest_theme_color(steps[red_index], steps[green_index], steps[blue_index])
+    return ansi_basic_color(value + 30 if value < 8 else value + 82)
+
+
+def ansi_basic_color(code: int) -> int:
+    """Map a basic ANSI color code to the active theme."""
+    color_names = {
+        30: "foreground",
+        31: "red",
+        32: "green",
+        33: "yellow",
+        34: "purple",
+        35: "pink",
+        36: "cyan",
+        37: "foreground",
+        90: "comment",
+        91: "red",
+        92: "green",
+        93: "yellow",
+        94: "purple",
+        95: "pink",
+        96: "cyan",
+        97: "foreground",
+    }
+    return theme_color(color_names.get(code, "foreground"))
+
+
+def parse_ansi_line(line: str) -> list[StyledSegment]:
+    """Parse ANSI SGR color sequences into styled text segments."""
+    segments: list[StyledSegment] = []
+    position = 0
+    color = theme_color("foreground")
+    bold = False
+    reverse = False
+
+    for match in ANSI_RE.finditer(line):
+        if match.start() > position:
+            segments.append(StyledSegment(line[position : match.start()], color, bold, reverse))
+
+        sequence = match.group()
+        if sequence.endswith("m"):
+            codes = [int(code or "0") for code in sequence[2:-1].split(";")]
+            index = 0
+            while index < len(codes):
+                code = codes[index]
+                if code == 0:
+                    color = theme_color("foreground")
+                    bold = False
+                    reverse = False
+                elif code == 1:
+                    bold = True
+                elif code == 22:
+                    bold = False
+                elif code == 7:
+                    reverse = True
+                elif code == 27:
+                    reverse = False
+                elif code == 39:
+                    color = theme_color("foreground")
+                elif code in {*range(30, 38), *range(90, 98)}:
+                    color = ansi_basic_color(code)
+                elif code == 38 and index + 2 < len(codes) and codes[index + 1] == 5:
+                    color = ansi_256_to_color(codes[index + 2])
+                    index += 2
+                elif code == 38 and index + 4 < len(codes) and codes[index + 1] == 2:
+                    color = nearest_theme_color(codes[index + 2], codes[index + 3], codes[index + 4])
+                    index += 4
+                index += 1
+        position = match.end()
+
+    if position < len(line):
+        segments.append(StyledSegment(line[position:], color, bold, reverse))
+    return segments or [StyledSegment("")]
+
+
+def visible_length(segments: Sequence[StyledSegment]) -> int:
+    """Return visible width for parsed segments."""
+    return sum(len(segment.text) for segment in segments)
+
+
+def strip_ansi(text: str) -> str:
+    """Return text without ANSI escape sequences."""
+    return ANSI_RE.sub("", text)
+
+
+def add_styled_text(
+    window: curses.window,
+    y: int,
+    x: int,
+    segments: Sequence[StyledSegment],
+    width: int,
+) -> None:
+    """Draw clipped styled text segments."""
+    used = 0
+    for segment in segments:
+        if used >= width:
+            return
+        text = segment.text[: width - used]
+        mode = color_pair(segment.color, segment.reverse)
+        if segment.bold:
+            mode |= curses.A_BOLD
+        add_text(window, y, x + used, text, width - used, mode)
+        used += len(text)
+
+
+def status_message(window: curses.window, message: str) -> None:
+    """Draw a one-line status message."""
+    height, width = window.getmaxyx()
+    add_text(window, height - 1, 0, message.ljust(width), width, curses.A_REVERSE)
+    window.refresh()
+
+
+def prompt(window: curses.window, label: str) -> str | None:
+    """Read a short prompt from the bottom status line."""
+    curses.noecho()
+    window.keypad(True)
+    curses.curs_set(1)
+    height, width = window.getmaxyx()
+    value = ""
+    try:
+        while True:
+            window.move(height - 1, 0)
+            window.clrtoeol()
+            text = f"{label}{value}"
+            add_text(window, height - 1, 0, text, width)
+            window.move(height - 1, min(width - 1, len(text)))
+            window.refresh()
+            key = window.getch()
+            if key == 27:
+                return None
+            if key in {curses.KEY_ENTER, 10, 13}:
+                return value.strip()
+            if key in {curses.KEY_BACKSPACE, 8, 127}:
+                value = value[:-1]
+            elif key == 21:
+                value = ""
+            elif 32 <= key <= 126:
+                value += chr(key)
+    finally:
+        curses.noecho()
+        curses.curs_set(0)
+
+
+class ReviewApp:
+    """Full-screen review2 terminal UI."""
+
+    def __init__(self, screen: curses.window, base: str) -> None:
+        """Create the TUI app."""
+        self.screen = screen
+        self.base = base
+        self.files: list[ChangedFile] = []
+        self.state: dict[str, Any] = {}
+        self.selected = 0
+        self.file_scroll = 0
+        self.diff_scroll = 0
+        self.message = "Ready."
+        self.diff_cache: dict[tuple[str, int], list[str]] = {}
+        self.search_query = ""
+        self.search_error = ""
+        self.search_active = False
+        self.search_cursor: tuple[int, int] | None = None
+        self.file_filter = "all"
+
+    def selected_file(self) -> ChangedFile | None:
+        """Return the selected changed file."""
+        files = self.visible_files()
+        if not files:
+            return None
+        self.selected = max(0, min(self.selected, len(files) - 1))
+        return files[self.selected]
+
+    def visible_files(self) -> list[ChangedFile]:
+        """Return changed files matching the active regex search."""
+        files = self.files
+        if self.file_filter == "checked":
+            files = [changed_file for changed_file in files if is_reviewed(changed_file.path, self.state)]
+        elif self.file_filter == "unchecked":
+            files = [changed_file for changed_file in files if not is_reviewed(changed_file.path, self.state)]
+
+        if not self.search_query:
+            self.search_error = ""
+            return files
+        try:
+            pattern = re.compile(self.search_query, re.IGNORECASE)
+        except re.error as error:
+            self.search_error = str(error)
+            return []
+        self.search_error = ""
+        return [changed_file for changed_file in files if pattern.search(changed_file.path)]
+
+    def reload(self) -> None:
+        """Reload files, state, and clear stale diff cache."""
+        self.files = changed_files(self.base)
+        self.state = load_state(self.base)
+        self.selected = max(0, min(self.selected, max(0, len(self.visible_files()) - 1)))
+        self.diff_cache.clear()
+
+    def run(self) -> None:
+        """Run the curses event loop."""
+        init_theme(os.environ.get("REVIEW2_THEME", "dracula").lower())
+        curses.curs_set(0)
+        self.screen.keypad(True)
+        self.reload()
+        while True:
+            curses.curs_set(1 if self.search_active else 0)
+            self.draw()
+            key = self.screen.getch()
+            if not self.search_active and key in {ord("q"), 27}:
+                return
+            self.handle_key(key)
+
+    def handle_key(self, key: int) -> None:
+        """Handle one key press."""
+        if self.search_active:
+            self.handle_search_key(key)
+        elif key in {ord("j"), curses.KEY_DOWN}:
+            self.move_selection(1)
+        elif key in {ord("k"), curses.KEY_UP}:
+            self.move_selection(-1)
+        elif key in {ord("J"), curses.KEY_NPAGE}:
+            self.diff_scroll += 10
+        elif key in {ord("K"), curses.KEY_PPAGE}:
+            self.diff_scroll = max(0, self.diff_scroll - 10)
+        elif key == ord(" "):
+            self.toggle_current()
+        elif key in {ord("c"), ord("e"), curses.KEY_ENTER, 10, 13}:
+            self.edit_current()
+        elif key == ord("d"):
+            self.open_current_diff()
+        elif key == ord("/"):
+            self.search_active = True
+            self.message = "Search mode. Enter accepts, Esc leaves, Ctrl-U clears."
+        elif key == ord("f"):
+            self.cycle_file_filter()
+        elif key == 21:
+            self.clear_search()
+        elif key == ord("p"):
+            self.publish_dry_run()
+        elif key == ord("r"):
+            self.reload()
+            self.message = "Refreshed."
+
+    def handle_search_key(self, key: int) -> None:
+        """Handle one key press while editing the regex search."""
+        if key in {27, curses.KEY_ENTER, 10, 13}:
+            self.search_active = False
+            self.message = "Search applied." if self.search_query else "Search cleared."
+        elif key == 21:
+            self.clear_search()
+        elif key == 23:
+            self.delete_search_word()
+        elif key in {curses.KEY_BACKSPACE, 8, 127}:
+            self.delete_search_char()
+        elif 32 <= key <= 126:
+            self.append_search_char(chr(key))
+
+    def move_selection(self, step: int) -> None:
+        """Move the selected file."""
+        files = self.visible_files()
+        if not files:
+            return
+        self.selected = max(0, min(len(files) - 1, self.selected + step))
+        self.diff_scroll = 0
+
+    def append_search_char(self, character: str) -> None:
+        """Append one typed character to the regex search."""
+        self.search_query += character
+        self.selected = 0
+        self.file_scroll = 0
+        self.diff_scroll = 0
+
+    def delete_search_char(self) -> None:
+        """Delete one character from the regex search."""
+        self.search_query = self.search_query[:-1]
+        self.selected = 0
+        self.file_scroll = 0
+        self.diff_scroll = 0
+
+    def delete_search_word(self) -> None:
+        """Delete the last regex search word."""
+        self.search_query = self.search_query.rstrip()
+        self.search_query = self.search_query[: self.search_query.rfind(" ") + 1].rstrip()
+        self.selected = 0
+        self.file_scroll = 0
+        self.diff_scroll = 0
+
+    def clear_search(self) -> None:
+        """Clear the active regex search."""
+        self.search_query = ""
+        self.search_error = ""
+        self.selected = 0
+        self.file_scroll = 0
+        self.diff_scroll = 0
+        self.message = "Search cleared."
+
+    def cycle_file_filter(self) -> None:
+        """Cycle file list filter between all, unchecked, and checked files."""
+        index = FILE_FILTERS.index(self.file_filter)
+        self.file_filter = FILE_FILTERS[(index + 1) % len(FILE_FILTERS)]
+        self.selected = 0
+        self.file_scroll = 0
+        self.diff_scroll = 0
+        self.message = f"Showing {self.file_filter} files."
+
+    def toggle_current(self) -> None:
+        """Toggle reviewed state for the selected file."""
+        current = self.selected_file()
+        if current is None:
+            return
+        toggle_reviewed(self.base, current.path)
+        self.state = load_state(self.base)
+        self.message = f"Toggled {current.path}."
+
+    def edit_current(self) -> None:
+        """Open the selected file in an editor."""
+        current = self.selected_file()
+        if current is None:
+            return
+        self.suspend(lambda: open_file(current.path))
+        self.reload()
+        self.message = f"Edited {current.path}."
+
+    def open_current_diff(self) -> None:
+        """Open the selected file diff in the pager."""
+        current = self.selected_file()
+        if current is None:
+            return
+        self.suspend(lambda: show_diff(self.base, current.path))
+        self.message = f"Viewed diff for {current.path}."
+
+    def publish_dry_run(self) -> None:
+        """Publish or dry-run comments outside curses."""
+        provider_input = prompt(self.screen, "provider [gitlab/github]: ")
+        if provider_input is None:
+            self.message = "Publish cancelled."
+            return
+        provider = provider_input.lower() or "gitlab"
+        if provider not in {"gitlab", "github"}:
+            self.message = "Publish cancelled: provider must be gitlab or github."
+            return
+        confirmation = prompt(self.screen, "type yes to publish for real, anything else for dry-run: ")
+        if confirmation is None:
+            self.message = "Publish cancelled."
+            return
+        dry_run = confirmation != "yes"
+        self.suspend(lambda: publish_comments(self.base, provider, dry_run=dry_run), wait=True)
+        mode = "dry-run" if dry_run else "publish"
+        self.message = f"{provider} {mode} finished."
+
+    def suspend(self, action: Any, *, wait: bool = False) -> None:
+        """Temporarily leave curses to run an external command."""
+        curses.def_prog_mode()
+        curses.endwin()
+        try:
+            action()
+            if wait:
+                input("\npress enter to return to review2 ")
+        finally:
+            curses.reset_prog_mode()
+            curses.curs_set(0)
+            self.screen.keypad(True)
+
+    def draw(self) -> None:
+        """Draw the full TUI."""
+        self.screen.erase()
+        self.search_cursor = None
+        height, width = self.screen.getmaxyx()
+        if height < 12 or width < 60:
+            add_text(self.screen, 0, 0, "Terminal too small for review2.", width)
+            self.screen.refresh()
+            return
+
+        files_height = max(5, min(10, height // 4))
+        comments_height = max(4, min(7, height // 5))
+        diff_height = height - files_height - comments_height - 4
+
+        self.draw_header(width)
+        self.draw_diff(1, 0, diff_height, width)
+        self.draw_comments(1 + diff_height, 0, comments_height, width)
+        self.draw_files(1 + diff_height + comments_height, 0, files_height, width)
+        add_text(
+            self.screen,
+            height - 2,
+            0,
+            self.message.ljust(width),
+            width,
+            color_pair(theme_color("comment")),
+        )
+        add_text(
+            self.screen,
+            height - 1,
+            0,
+            HELP_TEXT.ljust(width),
+            width,
+            curses.A_BOLD | color_pair(theme_color("purple")),
+        )
+        if self.search_active and self.search_cursor is not None:
+            try:
+                self.screen.move(*self.search_cursor)
+            except curses.error:
+                pass
+        self.screen.refresh()
+
+    def draw_header(self, width: int) -> None:
+        """Draw the app header."""
+        title = f" review2  {branch_name()} against {self.base} "
+        add_text(self.screen, 0, 0, title.ljust(width), width, curses.A_BOLD | color_pair(theme_color("purple")))
+
+    def draw_files(self, y: int, x: int, height: int, width: int) -> None:
+        """Draw the changed-file checklist pane."""
+        files = self.visible_files()
+        search_label = self.search_query or ""
+        search_prefix = "search>" if self.search_active else "search"
+        title = f"Files  filter:{self.file_filter}  {search_prefix} /{search_label}/  {len(files)}/{len(self.files)}"
+        if self.search_error:
+            title = f"Files  filter:{self.file_filter}  {search_prefix} /{search_label}/  regex error: {self.search_error}"
+        add_text(self.screen, y, x, title.ljust(width), width, curses.A_BOLD | color_pair(theme_color("cyan")))
+        if self.search_active:
+            cursor_x = min(width - 1, len(f"Files  {search_prefix} /{search_label}"))
+            self.search_cursor = (y, x + cursor_x)
+        visible_height = max(1, height - 1)
+        if self.selected < self.file_scroll:
+            self.file_scroll = self.selected
+        if self.selected >= self.file_scroll + visible_height:
+            self.file_scroll = self.selected - visible_height + 1
+
+        comments = collect_comments(self.files)
+        comment_counts: dict[str, int] = {}
+        for comment in comments:
+            comment_counts[comment.path] = comment_counts.get(comment.path, 0) + 1
+
+        for row in range(visible_height):
+            index = self.file_scroll + row
+            line_y = y + row + 1
+            if index >= len(files):
+                add_text(self.screen, line_y, x, " ".ljust(width), width)
+                continue
+            changed_file = files[index]
+            checked = "x" if is_reviewed(changed_file.path, self.state) else " "
+            count = comment_counts.get(changed_file.path, 0)
+            suffix = f" ({count})" if count else ""
+            label = f"[{checked}] {changed_file.path}{suffix}"
+            color = theme_color("green") if checked == "x" else theme_color("foreground")
+            mode = color_pair(color)
+            if index == self.selected:
+                mode = curses.A_BOLD | curses.A_UNDERLINE | color_pair(theme_color("purple"))
+            add_text(self.screen, line_y, x, label.ljust(width), width, mode)
+
+    def draw_diff(self, y: int, x: int, height: int, width: int) -> None:
+        """Draw the side-by-side diff pane."""
+        current = self.selected_file()
+        title = f"Diff: {current.path}" if current else "Diff"
+        add_text(self.screen, y, x, title.ljust(width), width, curses.A_BOLD | color_pair(theme_color("cyan")))
+        if current is None:
+            add_text(self.screen, y + 1, x, "No changed files.", width)
+            return
+
+        cache_key = (current.path, width)
+        if cache_key not in self.diff_cache:
+            self.diff_cache[cache_key] = side_by_side_diff_lines(self.base, current.path, width)
+        lines = self.diff_cache[cache_key]
+        max_scroll = max(0, len(lines) - height + 1)
+        self.diff_scroll = max(0, min(self.diff_scroll, max_scroll))
+
+        for row in range(max(1, height - 1)):
+            index = self.diff_scroll + row
+            line = lines[index] if index < len(lines) else ""
+            segments = parse_ansi_line(line)
+            add_styled_text(self.screen, y + row + 1, x, segments, width)
+            padding = width - visible_length(segments)
+            if padding > 0:
+                add_text(self.screen, y + row + 1, x + width - padding, " " * padding, padding)
+
+    def draw_comments(self, y: int, x: int, height: int, width: int) -> None:
+        """Draw comments for the selected file."""
+        current = self.selected_file()
+        add_text(self.screen, y, x, "Comments".ljust(width), width, curses.A_BOLD | color_pair(theme_color("cyan")))
+        if current is None:
+            return
+        comments = comments_for_path(current.path)
+        if not comments:
+            add_text(self.screen, y + 1, x, "No #review comments in this file.", width)
+            return
+        for row, comment in enumerate(comments[: max(0, height - 1)], 1):
+            text = f"{comment.target_line}: {comment.body}"
+            add_text(self.screen, y + row, x, text.ljust(width), width, color_pair(theme_color("yellow")))
+
+
+def interactive(base: str) -> None:
+    """Run the full-screen terminal UI."""
+    curses.wrapper(lambda screen: ReviewApp(screen, base).run())
+
+
+def parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    argument_parser = argparse.ArgumentParser(description="Review branch changes from the terminal.")
+    argument_parser.add_argument("--base", help="base branch/ref to compare against")
+    subparsers = argument_parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("status", help="show changed files and reviewed checkboxes")
+    subparsers.add_parser("comments", help="show local #review comments")
+    subparsers.add_parser("ui", help="open the interactive CLI app")
+
+    diff_parser = subparsers.add_parser("diff", help="show a side-by-side diff for a changed file")
+    diff_parser.add_argument("file", help="changed file path or list number")
+
+    edit_parser = subparsers.add_parser("edit", help="open a changed file to add #review comments")
+    edit_parser.add_argument("file", help="changed file path or list number")
+
+    toggle_parser = subparsers.add_parser("toggle", help="toggle reviewed checkbox for a changed file")
+    toggle_parser.add_argument("file", help="changed file path or list number")
+
+    publish_parser = subparsers.add_parser("publish", help="publish #review comments to a merge/pull request")
+    publish_parser.add_argument("--provider", choices=["gitlab", "github"], default="gitlab")
+    publish_parser.add_argument("--dry-run", action="store_true")
+
+    return argument_parser
+
+
+def normalize_args(arguments: Sequence[str]) -> list[str]:
+    """Move global options before the subcommand for argparse."""
+    normalized: list[str] = []
+    remaining: list[str] = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--base" and index + 1 < len(arguments):
+            normalized.extend([argument, arguments[index + 1]])
+            index += 2
+        elif argument.startswith("--base="):
+            normalized.append(argument)
+            index += 1
+        else:
+            remaining.append(argument)
+            index += 1
+    return [*normalized, *remaining]
+
+
+def main() -> None:
+    """Run the review2 CLI."""
+    args = parser().parse_args(normalize_args(sys.argv[1:]))
+    base = args.base or default_base()
+    verify_base(base)
+
+    if args.command in {None, "ui"}:
+        interactive(base)
+    elif args.command == "status":
+        print_status(base)
+    elif args.command == "comments":
+        list_comments(base)
+    elif args.command == "diff":
+        show_diff(base, resolve_path(changed_files(base), args.file))
+    elif args.command == "edit":
+        open_file(resolve_path(changed_files(base), args.file))
+    elif args.command == "toggle":
+        toggle_reviewed(base, resolve_path(changed_files(base), args.file))
+    elif args.command == "publish":
+        publish_comments(base, args.provider, args.dry_run)
+
+
+if __name__ == "__main__":
+    main()

@@ -7,10 +7,24 @@
 // custom settings, run `zed: open default settings` from the
 // command palette (cmd-shift-p / ctrl-shift-p)
 {
+  "diff_view_style": "split",
+  "edit_predictions": {
+    "provider": "zed"
+  },
+  "terminal": {
+    "shell": {
+      "with_arguments": {
+        "program": "zsh",
+        "args": [],
+        "title_override": null,
+      },
+    },
+  },
+  "cli_default_open_behavior": "existing_window",
   "proxy": "",
   "agent_servers": {
     "codex-acp": {
-      "type": "registry"
+      "type": "registry",
     },
   },
   "minimap": {
@@ -42,5 +56,5 @@
     "mode": "system",
     "light": "Dracula",
     "dark": "Dracula",
-  }
+  },
 }

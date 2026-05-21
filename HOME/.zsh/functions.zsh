@@ -23,6 +23,20 @@ push-dots(){
 pull-dots(){
   cd $DOTFILES && git pull && cd $HOME && cd $HOME/data-science && git pull && cd $HOME/cheatsheets && git pull && cd $HOME/Templates && git pull && cd $HOME
 }
+
+# Open the Jira ticket and GitLab MR for the current ticket branch.
+ticket(){
+  "$DOTFILES/src/ticket" "$@"
+}
+
+jira-worktree(){
+  "$DOTFILES/src/jira-worktree" "$@"
+}
+
+review2(){
+  "$DOTFILES/src/review2" "$@"
+}
+
 # open this file
 funs(){
     nvim $HOME/.dotfiles/HOME/.zsh/functions.zsh
@@ -325,6 +339,72 @@ gvim() {
       fzf -m \
         --preview 'zsh -c '\''source "$HOME/.dotfiles/HOME/.zsh/functions.zsh"; _gvim_preview "$1"'\'' _ {}' \
         --preview-window='right,70%,border-left'
+  )"
+
+  [[ -n "$selected" ]] || return 0
+
+  files=("${(@f)selected}")
+
+  (( ${#files[@]} )) || return 0
+  nvim "${files[@]}"
+}
+
+_review_preview() {
+  local base="${1:-main}"
+  local file="$2"
+  local branch
+  local preview_columns="${FZF_PREVIEW_COLUMNS:-${COLUMNS:-0}}"
+  local -a delta_width_args
+
+  (( preview_columns > 0 )) && delta_width_args=(--width="$preview_columns")
+
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  [[ -n "$branch" ]] || branch="HEAD"
+
+  git diff \
+    --no-ext-diff \
+    --src-prefix="$base/" \
+    --dst-prefix="$branch/" \
+    "$base"...HEAD \
+    -- "$file" | delta \
+    --paging=never \
+    --side-by-side \
+    "${delta_width_args[@]}" \
+    --syntax-theme=Dracula \
+    --line-numbers \
+    --line-numbers-plus-style='#50fa7b "#1f3a2a"' \
+    --line-numbers-minus-style='#ff5555 "#4a1f2b"' \
+    --plus-style='syntax "#1f3a2a"' \
+    --minus-style='syntax "#4a1f2b"' \
+    --plus-emph-style='syntax bold "#1f3a2a"' \
+    --minus-emph-style='syntax bold "#4a1f2b"' \
+    --keep-plus-minus-markers
+}
+
+review() {
+  local base="${1:-main}"
+  local branch
+  local selected
+  local -a files
+
+  git rev-parse --verify --quiet "$base" >/dev/null || {
+    printf 'Base ref not found: %s\n' "$base" >&2
+    return 1
+  }
+
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  [[ -n "$branch" ]] || branch="HEAD"
+
+  selected="$(
+    git diff --name-only "$base"...HEAD |
+      REVIEW_BASE="$base" fzf -m \
+        --preview 'zsh -c '\''source "$HOME/.dotfiles/HOME/.zsh/functions.zsh"; _review_preview "$REVIEW_BASE" "$1"'\'' _ {}' \
+        --height=100% \
+        --preview-window='up,75%,border-bottom' \
+        --layout=reverse \
+        --preview-label=" $base left | $branch right " \
+        --border \
+        --border-label=" files changed against $base "
   )"
 
   [[ -n "$selected" ]] || return 0

@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+die() {
+  printf 'ticket: %s\n' "$*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"
+}
+
+current_branch() {
+  git branch --show-current 2>/dev/null || git symbolic-ref --quiet --short HEAD 2>/dev/null || true
+}
+
+ticket_key_from_ref() {
+  local ref="$1"
+  local key
+
+  key="$(printf '%s\n' "$ref" | grep -Eio '[A-Z][A-Z0-9]+-[0-9]+' | head -n 1 || true)"
+  [[ -n "$key" ]] || return 1
+  printf '%s\n' "$key" | tr '[:lower:]' '[:upper:]'
+}
+
+pwd_branch_ref() {
+  local path="${PWD%/}"
+  local key="$1"
+  local lower_key
+  local index
+  local part
+  local lower_part
+  local -a parts
+
+  lower_key="$(printf '%s\n' "$key" | tr '[:upper:]' '[:lower:]')"
+  IFS='/' read -r -a parts <<<"$path"
+
+  for index in "${!parts[@]}"; do
+    part="${parts[$index]}"
+    lower_part="$(printf '%s\n' "$part" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$lower_part" == *"$lower_key"* ]]; then
+      if (( index > 0 )); then
+        printf '%s/%s\n' "${parts[$((index - 1))]}" "$part"
+      else
+        printf '%s\n' "$part"
+      fi
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+open_jira() {
+  local key="$1"
+
+  if command -v jira >/dev/null 2>&1; then
+    jira "$key"
+    return 0
+  fi
+
+  need zsh
+  zsh -ic 'jira "$1"' zsh "$key"
+}
+
+main() {
+  need git
+  need glab
+
+  local branch
+  local key
+  local mr_ref
+
+  branch="$(current_branch)"
+  key="$(ticket_key_from_ref "$branch" || ticket_key_from_ref "$PWD" || true)"
+  [[ -n "$key" ]] || die "could not find ticket key like IPRO-1234 in branch or PWD"
+
+  if [[ -n "$branch" ]]; then
+    mr_ref="$branch"
+  else
+    mr_ref="$(pwd_branch_ref "$key")" || die "could not derive MR branch ref from PWD"
+  fi
+
+  open_jira "$key"
+  glab mr view "$mr_ref" --web
+}
+
+main "$@"

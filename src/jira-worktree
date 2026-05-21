@@ -1,0 +1,566 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+WORK_CONFIG="${WORK_CONFIG:-$HOME/.work/work.zsh}"
+BARE_REPO="${SERVICE_DOC_AI_API_BARE_REPO:-$HOME/repositories/service-doc-ai-api.git}"
+JIRA_PLUGIN="${JIRA_PLUGIN:-$HOME/.local/share/zinit/snippets/OMZP::jira/jira.plugin.zsh/jira.plugin.zsh}"
+JIRATUI_CONFIG="${JIRATUI_CONFIG:-$HOME/.config/jiratui/config.yaml}"
+FIELD_DELIMITER=$'\x1f'
+DONE_STATUSES=("Done" "DONE" "Fertig" "Erledigt" "Abgeschlossen" "Geschlossen" "Closed" "CLOSED")
+REVIEW_STATUSES=("Ready for Review" "In Review" "Review" "Bereit für Review" "Bereit fuer Review" "Bereit zur Prüfung" "In Prüfung" "In Pruefung")
+
+JIRA_BASE_URL=""
+JIRA_API_URL=""
+JIRA_URL=""
+JIRA_HOST=""
+JIRA_USER=""
+JIRA_USERNAME=""
+JIRA_EMAIL=""
+JIRA_NAME=""
+JIRA_TOKEN=""
+JIRA_API_TOKEN=""
+JIRA_PAT=""
+ATLASSIAN_API_TOKEN=""
+JIRA_PASSWORD=""
+GITLAB_BASE_URL=""
+GITLAB_API_URL=""
+GITLAB_URL=""
+GITLAB_HOST=""
+CODEFACTORY_GITLAB_HOST=""
+GITLAB_TOKEN=""
+GITLAB_API_TOKEN=""
+GITLAB_PRIVATE_TOKEN=""
+GL_TOKEN=""
+GITLAB_PROJECT_ID=""
+GITLAB_PROJECT_PATH=""
+
+die() {
+  printf 'jira-worktree: %s\n' "$*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"
+}
+
+load_exported_work_config() {
+  [[ -r "$WORK_CONFIG" ]] || die "cannot read work config: $WORK_CONFIG"
+
+  local line key value
+
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line#export }"
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "$value" == *'$('* ]] && continue
+    value="${value%\"}"
+    value="${value#\"}"
+    value="${value%\'}"
+    value="${value#\'}"
+    printf -v "$key" '%s' "$value"
+  done < "$WORK_CONFIG"
+
+  JIRA_EMAIL="${JIRA_EMAIL:-aleksej.krueger@dkb.de}"
+  JIRA_USER="${JIRA_USER:-$JIRA_EMAIL}"
+  JIRA_TOKEN="${JIRA_TOKEN:-$(yaml_config_value jira_api_token "$JIRATUI_CONFIG")}"
+  JIRA_NAME="${JIRA_NAME:-$JIRA_EMAIL}"
+}
+
+yaml_config_value() {
+  local key="$1"
+  local file="$2"
+  [[ -r "$file" ]] || return 0
+
+  awk -F ':' -v key="$key" '
+    $1 == key {
+      value = substr($0, index($0, ":") + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^'\''|'\''$/, "", value)
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }
+  ' "$file"
+}
+
+first_value() {
+  local value
+  for value in "$@"; do
+    [[ -n "$value" ]] && printf '%s\n' "$value" && return 0
+  done
+  return 1
+}
+
+trim_trailing_slash() {
+  local value="$1"
+  printf '%s\n' "${value%/}"
+}
+
+url_encode() {
+  jq -nr --arg value "$1" '$value|@uri'
+}
+
+jira_base_url() {
+  local base
+  base="$(first_value "$JIRA_BASE_URL" "$JIRA_API_URL" "$JIRA_URL" "$JIRA_HOST" || true)"
+  [[ -n "$base" ]] || die "set JIRA_BASE_URL, JIRA_API_URL, JIRA_URL, or JIRA_HOST in $WORK_CONFIG"
+  [[ "$base" == http* ]] || base="https://$base"
+  trim_trailing_slash "$base"
+}
+
+gitlab_repo() {
+  local remote url
+  remote="$(in_repo git remote get-url origin)"
+  url="${remote%.git}"
+
+  if [[ "$url" =~ ^git@([^:]+):(.+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  url="${url#*://}"
+  printf '%s\n' "${url#*/}"
+}
+
+gitlab_project_url() {
+  local host
+  host="$(first_value "$GITLAB_HOST" "$CODEFACTORY_GITLAB_HOST" || true)"
+  [[ -n "$host" ]] || host="$(in_repo git remote get-url origin | sed -E 's#^https?://([^/]+)/.*#\1#; s#^git@([^:]+):.*#\1#')"
+  printf 'https://%s/%s\n' "$host" "$(gitlab_repo)"
+}
+
+repo_root() {
+  cd "$BARE_REPO" && pwd -P
+}
+
+in_repo() {
+  (cd "$(repo_root)" && "$@")
+}
+
+run_jira_function() {
+  local action="$1"
+  local jira_url
+  jira_url="$(jira_base_url)"
+  [[ -r "$JIRA_PLUGIN" ]] || die "cannot read jira plugin: $JIRA_PLUGIN"
+
+  zsh -fc '
+    JIRA_URL="$1"
+    JIRA_NAME="$2"
+    source "$3"
+    function open_command() {
+      open -a "Brave Browser" "$1" 2>/dev/null || open "$1"
+    }
+    jira "$4"
+  ' zsh "$jira_url" "$JIRA_NAME" "$JIRA_PLUGIN" "$action" >/dev/null
+}
+
+jira_assignment_url() {
+  local jira_url
+  jira_url="$(jira_base_url)"
+  printf '%s/secure/IssueNavigator.jspa?reset=true&jqlQuery=%s\n' "$jira_url" "$(jira_assignment_jql_encoded)"
+}
+
+jira_assignment_jql_encoded() {
+  url_encode "$(jira_assignment_jql)"
+}
+
+jira_assignment_jql() {
+  local quoted_statuses jql
+  quoted_statuses="$(printf '"%s",' "${DONE_STATUSES[@]}")"
+  quoted_statuses="${quoted_statuses%,}"
+  jql="project = IPRO AND assignee = \"$JIRA_NAME\" AND statusCategory != Done AND resolution is EMPTY AND status not in ($quoted_statuses) ORDER BY updated DESC"
+  printf '%s\n' "$jql"
+}
+
+jira_search_json() {
+  local base="$1"
+  local jql="$2"
+
+  JIRA_BASE_URL="$base" \
+  JIRA_USER="$(first_value "$JIRA_EMAIL" "$JIRA_USER" "$JIRA_USERNAME" || true)" \
+  JIRA_TOKEN_VALUE="$(first_value "$JIRA_TOKEN" "$JIRA_API_TOKEN" "$JIRA_PAT" "$ATLASSIAN_API_TOKEN" "$JIRA_PASSWORD" || true)" \
+  python3 - "$jql" <<'PY'
+import base64
+import json
+import os
+import ssl
+import sys
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+
+def readable_ca_file() -> str | None:
+    """Return a readable CA bundle from common environment variables."""
+    for name in ("CURL_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        value = os.environ.get(name, "")
+        if value.startswith("~/"):
+            value = str(Path.home() / value[2:])
+        if value and Path(value).is_file():
+            return value
+    return None
+
+
+ca_file = readable_ca_file()
+context = ssl.create_default_context(cafile=ca_file) if ca_file else ssl.create_default_context()
+
+user = os.environ.get("JIRA_USER", "")
+token = os.environ.get("JIRA_TOKEN_VALUE", "")
+
+
+def request_with_auth(url: str, auth_header: str | None) -> dict:
+    """Fetch Jira search results with one optional Authorization header."""
+    request = Request(url)
+    if auth_header:
+        request.add_header("Authorization", auth_header)
+    with urlopen(request, context=context) as response:
+        return json.load(response)
+
+
+def fetch_page(url: str) -> dict:
+    """Fetch one Jira page, trying Bearer first and Basic as fallback."""
+    if not token:
+        return request_with_auth(url, None)
+
+    try:
+        return request_with_auth(url, f"Bearer {token}")
+    except HTTPError as error:
+        if error.code not in (401, 403) or not user:
+            raise
+        auth = base64.b64encode(f"{user}:{token}".encode()).decode()
+        return request_with_auth(url, f"Basic {auth}")
+
+
+try:
+    base_url = os.environ["JIRA_BASE_URL"].rstrip("/")
+    jql = sys.argv[1]
+    start_at = 0
+    max_results = 100
+    all_issues = []
+    total = None
+
+    while total is None or start_at < total:
+        query = urlencode({
+            "jql": jql,
+            "fields": "summary,status,key",
+            "maxResults": str(max_results),
+            "startAt": str(start_at),
+        })
+        page = fetch_page(f"{base_url}/rest/api/2/search?{query}")
+        issues = page.get("issues", [])
+        all_issues.extend(issues)
+        total = int(page.get("total", len(all_issues)))
+        if not issues:
+            break
+        start_at += len(issues)
+
+    print(json.dumps({"issues": all_issues, "total": len(all_issues)}))
+except HTTPError as error:
+    raise SystemExit(f"Jira API returned HTTP {error.code}. Check Jira API token/user in {Path.home() / '.config/jiratui/config.yaml'}.")
+except URLError as error:
+    raise SystemExit(f"Could not reach Jira API: {error.reason}")
+PY
+}
+
+ticket_branches_for_key() {
+  local key="$1"
+  in_repo git for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin |
+    awk -v key="$key" '
+      $0 == "origin/HEAD" { next }
+      {
+        branch = $0
+        sub(/^origin\//, "", branch)
+      }
+      index(branch, key) {
+        print branch
+      }
+    ' | sort -fu
+}
+
+ticket_branch_for_key_if_unique() {
+  local key="$1"
+  local branches
+  branches="$(ticket_branches_for_key "$key")"
+  [[ -n "$branches" ]] || return 0
+
+  if [[ "$(printf '%s\n' "$branches" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 1 ]]; then
+    printf '%s\n' "$branches"
+  fi
+}
+
+ticket_branch_label_for_key() {
+  local key="$1"
+  local branches count
+  branches="$(ticket_branches_for_key "$key")"
+  [[ -n "$branches" ]] || return 0
+  count="$(printf '%s\n' "$branches" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+  if [[ "$count" -eq 1 ]]; then
+    printf '%s\n' "$branches"
+  else
+    printf '%s branches' "$count"
+  fi
+}
+
+ticket_worktree_for_branch() {
+  local branch="$1"
+  [[ -n "$branch" ]] || return 0
+
+  in_repo git worktree list --porcelain |
+    awk -v suffix="/$branch" '
+      /^worktree / {
+        path = substr($0, 10)
+        if (substr(path, length(path) - length(suffix) + 1) == suffix) {
+          print path
+          exit
+        }
+      }
+    '
+}
+
+is_review_status() {
+  local status="$1"
+  local review_status
+
+  for review_status in "${REVIEW_STATUSES[@]}"; do
+    [[ "${status,,}" == "${review_status,,}" ]] && return 0
+  done
+
+  [[ "${status,,}" == *review* || "${status,,}" == *prüfung* || "${status,,}" == *pruefung* ]]
+}
+
+gitlab_branch_for_ticket() {
+  local key="$1"
+  local repo mr_json
+  repo="$(gitlab_project_url)"
+  mr_json="$(in_repo glab mr list --repo "$repo" --search "$key" --output json 2>/dev/null || true)"
+
+  jq -r --arg key "$key" '
+    map(select(
+      ((.source_branch // .sourceBranch // "") | contains($key))
+    ))
+    | .[0]
+    | (.source_branch // .sourceBranch // empty)
+  ' <<<"${mr_json:-[]}"
+}
+
+gitlab_mr_url_for_ticket() {
+  local key="$1"
+  local repo mr_json
+  repo="$(gitlab_project_url)"
+  mr_json="$(in_repo glab mr list --repo "$repo" --search "$key" --output json 2>/dev/null || true)"
+
+  jq -r --arg key "$key" '
+    map(select((.source_branch // .sourceBranch // "") | contains($key)))
+    | .[0]
+    | (.web_url // .webUrl // empty)
+  ' <<<"${mr_json:-[]}"
+}
+
+gitlab_mr_url_for_branch() {
+  local branch="$1"
+  local repo mr_json
+  repo="$(gitlab_project_url)"
+  mr_json="$(in_repo glab mr list --repo "$repo" --source-branch "$branch" --output json 2>/dev/null || true)"
+
+  jq -r --arg branch "$branch" '
+    map(select((.source_branch // .sourceBranch // "") == $branch))
+    | .[0]
+    | (.web_url // .webUrl // empty)
+  ' <<<"${mr_json:-[]}" 2>/dev/null || true
+}
+
+resolve_branch_after_selection() {
+  local key="$1"
+  local branch="$2"
+  local branches count
+  [[ -n "$branch" ]] && printf '%s\n' "$branch" && return 0
+
+  branches="$(ticket_branches_for_key "$key")"
+  [[ -n "$branches" ]] || return 0
+
+  count="$(printf '%s\n' "$branches" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [[ "$count" -eq 1 ]]; then
+    printf '%s\n' "$branches"
+  else
+    printf '%s\n' "$branches" | fzf --prompt="Branch for $key: "
+  fi
+}
+
+select_issue() {
+  local issues base jql
+  base="$(jira_base_url)"
+  jql="$(jira_assignment_jql)"
+  issues="$(jira_search_json "$base" "$jql")" || exit $?
+
+  jq -r '
+    .issues[]
+    | .key as $key
+    | (.fields.summary // "") as $summary
+    | (.fields.status.name // "unknown") as $status
+    | [$key, $status, $summary]
+    | @tsv
+  ' <<<"$issues" |
+    while IFS=$'\t' read -r key status summary; do
+      branch="$(ticket_branch_for_key_if_unique "$key")"
+      branch_label="${branch:-$(ticket_branch_label_for_key "$key")}"
+      mr_url=""
+      if [[ -z "$branch" ]] && is_review_status "$status"; then
+        branch="$(gitlab_branch_for_ticket "$key")"
+        branch_label="${branch:-$branch_label}"
+        mr_url="$(gitlab_mr_url_for_ticket "$key")"
+      fi
+      worktree="$(ticket_worktree_for_branch "$branch")"
+      printf '%s%s%s%s%s%s%s%s%s%s%s%s%s\n' \
+        "$key" "$FIELD_DELIMITER" \
+        "$status" "$FIELD_DELIMITER" \
+        "$summary" "$FIELD_DELIMITER" \
+        "$branch" "$FIELD_DELIMITER" \
+        "$worktree" "$FIELD_DELIMITER" \
+        "$mr_url" "$FIELD_DELIMITER" \
+        "$status | $key | ${branch_label:-no branch} | $summary"
+    done |
+    sort -f -t "$FIELD_DELIMITER" -k7,7 |
+    fzf --delimiter="$FIELD_DELIMITER" --with-nth=7 --prompt='Jira assignment: '
+}
+
+slugify() {
+  tr '[:upper:]' '[:lower:]' |
+    sed -E 's/ä/ae/g; s/ö/oe/g; s/ü/ue/g; s/ß/ss/g; s/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g' |
+    cut -c 1-72
+}
+
+choose_branch_type() {
+  printf 'feat\nfix\n' | fzf --prompt='Create worktree as: ' || true
+}
+
+ensure_worktree() {
+  local key="$1"
+  local status="$2"
+  local summary="$3"
+  local branch="$4"
+  local worktree="$5"
+  local branch_type slug branch_path
+
+  if [[ -n "$worktree" && -d "$worktree" ]]; then
+    printf '%s\t%s\n' "$branch" "$worktree"
+    return 0
+  fi
+
+  if [[ -z "$branch" ]]; then
+    if is_review_status "$status"; then
+      die "$key is in review status '$status', but no GitLab branch/MR was found"
+    fi
+
+    branch_type="$(choose_branch_type)"
+    [[ "$branch_type" == "feat" || "$branch_type" == "fix" ]] || die "no branch type selected"
+    slug="$(printf '%s' "$summary" | slugify)"
+    [[ -n "$slug" ]] || slug="work"
+    branch="$branch_type/$key-$slug"
+  fi
+
+  if [[ "$branch" == /* || "$branch" == *".."* ]]; then
+    die "refusing unsafe branch name for worktree path: $branch"
+  fi
+
+  branch_path="$(repo_root)/$branch"
+  mkdir -p "$(dirname "$branch_path")"
+
+  if in_repo git show-ref --verify --quiet "refs/heads/$branch"; then
+    in_repo git worktree add "$branch_path" "$branch" >&2
+  elif in_repo git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+    in_repo git fetch origin "$branch:$branch" >&2
+    in_repo git worktree add "$branch_path" "$branch" >&2
+  else
+    in_repo git worktree add -b "$branch" "$branch_path" main >&2
+  fi
+
+  printf '%s\t%s\n' "$branch" "$branch_path"
+}
+
+open_jira_issue() {
+  local key="$1"
+  run_jira_function "$key"
+}
+
+worktree_source_ref() {
+  local worktree="$1"
+  local root
+
+  [[ -n "$worktree" ]] || die "cannot resolve source ref without a worktree path"
+  [[ -d "$worktree" ]] || die "worktree does not exist: $worktree"
+
+  root="$(repo_root)"
+  local source_ref="${worktree#"$root"/}"
+  [[ "$source_ref" != "$worktree" && -n "$source_ref" ]] || die "worktree is not inside $root: $worktree"
+  printf '%s\n' "$source_ref"
+}
+
+start_tmux() {
+  local key="$1"
+  local worktree="$2"
+  local session source_ref quoted_source_ref
+
+  session="$(printf 'jira-%s' "$key" | tr '[:upper:]' '[:lower:]')"
+  source_ref="$(worktree_source_ref "$worktree")"
+  quoted_source_ref="$(printf '%q' "$source_ref")"
+
+  if ! tmux has-session -t "$session" 2>/dev/null; then
+    tmux new-session -d -s "$session" -n install-dev -c "$worktree" \
+      -e "PROJECT_PATH=$worktree" \
+      -e "JIRA_KEY=$key" \
+      -e "PROJECT_BRANCH=$source_ref" \
+      "make install-dev; exec zsh"
+    tmux new-window -t "$session:" -n nvim -c "$worktree" "nvim -c NvimTreeOpen; exec zsh"
+    tmux new-window -t "$session:" -n git -c "$worktree" "lazygit; exec zsh"
+    tmux new-window -t "$session:" -n mr -c "$worktree"
+    tmux run-shell -b "sleep 1; tmux send-keys -t '$session:mr' 'glab mr view $quoted_source_ref --web' Enter"
+  fi
+
+  tmux set-environment -t "$session" PROJECT_PATH "$worktree"
+  tmux set-environment -t "$session" JIRA_KEY "$key"
+  tmux set-environment -t "$session" PROJECT_BRANCH "$source_ref"
+
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux switch-client -t "$session"
+  else
+    tmux attach-session -c "$worktree" -t "$session"
+  fi
+}
+
+main() {
+  need fzf
+  need git
+  need glab
+  need jq
+  need nvim
+  need python3
+  need sed
+  need tmux
+  need zsh
+  [[ -d "$BARE_REPO" ]] || die "bare repo not found: $BARE_REPO"
+
+  load_exported_work_config
+
+  local selected key status summary branch worktree mr_url ensured
+  selected="$(select_issue)"
+  [[ -n "$selected" ]] || exit 0
+
+  IFS="$FIELD_DELIMITER" read -r key status summary branch worktree mr_url _ <<<"$selected"
+  branch="$(resolve_branch_after_selection "$key" "$branch")"
+  worktree="$(ticket_worktree_for_branch "$branch")"
+  if [[ -z "$mr_url" && -n "$branch" ]]; then
+    mr_url="$(gitlab_mr_url_for_branch "$branch")"
+  fi
+  ensured="$(ensure_worktree "$key" "$status" "$summary" "$branch" "$worktree")"
+  IFS=$'\t' read -r branch worktree <<<"$ensured"
+
+  open_jira_issue "$key"
+  start_tmux "$key" "$worktree"
+}
+
+main "$@"
