@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Terminal review helper for branch changes.
 
-review2 compares the current branch against a base ref, shows changed files in a
+review compares the current branch against a base ref, shows changed files in a
 full-screen curses UI, and stores per-file reviewed checkboxes under
-.git/review2/<base>...<branch>/state.json. The default UI keeps a side-by-side
+.git/review/<base>...<branch>/state.json. The default UI keeps a side-by-side
 diff at the top, a compact comment summary below it, and the changed-file list at
 the bottom.
 
@@ -28,7 +28,7 @@ Useful keys in the UI:
 - o opens the current GitLab MR or GitHub PR in the browser.
 - p publishes local #review markers, with output shown in a popup.
 
-For a lightweight picker instead of the full TUI, run "review2 --fast". It opens
+For a lightweight picker instead of the full TUI, run "review --fast". It opens
 fzf with a delta-powered preview above the file list and respects --base.
 """
 
@@ -52,8 +52,8 @@ from urllib.parse import quote
 
 
 REVIEW_MARKER_RE = re.compile(r"(?P<prefix>#|//|--|;|/\*|\*)\s*review\b:?\s*(?P<body>.*)$", re.IGNORECASE)
-LEGACY_MARKER_RE = re.compile(r"\bREVIEW2:\s*(?P<body>.*)$")
-MARKER_RE = re.compile(r"(?:#|//|--|;|/\*|\*)\s*review\b:?.*$|\bREVIEW2:\s*.*$", re.IGNORECASE)
+LEGACY_MARKER_RE = re.compile(r"\breview:\s*(?P<body>.*)$")
+MARKER_RE = re.compile(r"(?:#|//|--|;|/\*|\*)\s*review\b:?.*$|\breview:\s*.*$", re.IGNORECASE)
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 FALLBACK_BODY_RE = re.compile(r"^(?P<path>.+):(?P<line>\d+)\n\n(?P<body>.*)$", re.DOTALL)
 BASIC_ANSI_COLOR_CODES = {*range(30, 38), *range(90, 98)}
@@ -156,7 +156,7 @@ THEME_COLOR_NUMBERS: dict[str, int] = {}
 
 def die(message: str) -> None:
     """Print an error message and exit with status 1."""
-    print(f"review2: {message}", file=sys.stderr)
+    print(f"review: {message}", file=sys.stderr)
     raise SystemExit(1)
 
 
@@ -258,7 +258,7 @@ def safe_name(value: str) -> str:
 
 def review_root(base: str) -> Path:
     """Return the private state directory for this branch review."""
-    return git_dir() / "review2" / f"{safe_name(base)}...{safe_name(branch_name())}"
+    return git_dir() / "review" / f"{safe_name(base)}...{safe_name(branch_name())}"
 
 
 def state_file(base: str) -> Path:
@@ -569,7 +569,7 @@ def fast_select_file(base: str, files: Sequence[ChangedFile]) -> str | None:
         "--height=100%",
         "--layout=reverse",
         "--border",
-        "--prompt=review2 fast> ",
+        "--prompt=review fast> ",
         "--preview-window=up,70%,border-bottom",
         "--preview",
         fast_preview_command(base, branch_name()),
@@ -1197,7 +1197,7 @@ def load_theme(theme_name: str) -> dict[str, tuple[int, int, int]]:
     if theme_name in THEMES:
         return THEMES[theme_name]
 
-    theme_path = Path.home() / ".config" / "review2" / "themes" / f"{theme_name}.json"
+    theme_path = Path.home() / ".config" / "review" / "themes" / f"{theme_name}.json"
     if not theme_path.exists():
         return THEMES["dracula"]
 
@@ -1479,7 +1479,7 @@ def confirm_publish(window: curses.window, provider: str) -> bool | None:
 
 
 class ReviewApp:
-    """Full-screen review2 terminal UI."""
+    """Full-screen review terminal UI."""
 
     def __init__(self, screen: curses.window, base: str) -> None:
         """Create the TUI app."""
@@ -1540,7 +1540,7 @@ class ReviewApp:
 
     def run(self) -> None:
         """Run the curses event loop."""
-        init_theme(os.environ.get("REVIEW2_THEME", "dracula").lower())
+        init_theme(os.environ.get("review_THEME", "dracula").lower())
         curses.curs_set(0)
         self.screen.keypad(True)
         self.reload()
@@ -1730,7 +1730,7 @@ class ReviewApp:
                 failed = True
             except Exception as error:
                 failed = True
-                print(f"review2: {error}", file=sys.stderr)
+                print(f"review: {error}", file=sys.stderr)
 
         mode = "dry-run" if dry_run else "publish"
         messages = output.getvalue().splitlines()
@@ -1768,7 +1768,7 @@ class ReviewApp:
                 message = detail[-1] if detail else f"Could not load {provider} comments."
                 return False, message
             except Exception as error:
-                return False, f"review2: {error}"
+                return False, f"review: {error}"
 
         total = sum(len(threads) for threads in self.remote_threads_by_path.values())
         return True, f"Loaded {total} remote thread{'s' if total != 1 else ''}."
@@ -2017,7 +2017,7 @@ class ReviewApp:
         self.search_cursor = None
         height, width = self.screen.getmaxyx()
         if height < 12 or width < 60:
-            add_text(self.screen, 0, 0, "Terminal too small for review2.", width)
+            add_text(self.screen, 0, 0, "Terminal too small for review.", width)
             self.screen.refresh()
             return
 
@@ -2054,7 +2054,7 @@ class ReviewApp:
 
     def draw_header(self, width: int) -> None:
         """Draw the app header."""
-        title = f" review2  {self.branch} against {self.base} "
+        title = f" review  {self.branch} against {self.base} "
         add_text(self.screen, 0, 0, title.ljust(width), width, curses.A_BOLD | color_pair(theme_color("purple")))
 
     def draw_files(self, y: int, x: int, height: int, width: int) -> None:
@@ -2199,7 +2199,7 @@ def normalize_args(arguments: Sequence[str]) -> list[str]:
 
 
 def main() -> None:
-    """Run the review2 CLI."""
+    """Run the review CLI."""
     args = parser().parse_args(normalize_args(sys.argv[1:]))
     base = args.base or default_base()
     verify_base(base)

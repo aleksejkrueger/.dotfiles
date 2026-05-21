@@ -33,8 +33,8 @@ jira-worktree(){
   "$DOTFILES/src/jira-worktree" "$@"
 }
 
-review2(){
-  "$DOTFILES/src/review2" "$@"
+review(){
+  "$DOTFILES/src/review" "$@"
 }
 
 # open this file
