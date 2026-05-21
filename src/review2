@@ -12,9 +12,11 @@ import re
 import shlex
 import subprocess
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 from urllib.parse import quote
 
 
@@ -22,10 +24,11 @@ REVIEW_MARKER_RE = re.compile(r"(?P<prefix>#|//|--|;|/\*|\*)\s*review\b:?\s*(?P<
 LEGACY_MARKER_RE = re.compile(r"\bREVIEW2:\s*(?P<body>.*)$")
 MARKER_RE = re.compile(r"(?:#|//|--|;|/\*|\*)\s*review\b:?.*$|\bREVIEW2:\s*.*$", re.IGNORECASE)
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+FALLBACK_BODY_RE = re.compile(r"^(?P<path>.+):(?P<line>\d+)\n\n(?P<body>.*)$", re.DOTALL)
 BASIC_ANSI_COLOR_CODES = {*range(30, 38), *range(90, 98)}
 HELP_TEXT = (
-    "/ search  f filter  j/k move  J/K scroll  Space toggle  c/e edit  d pager  p publish  "
-    "r refresh  q quit"
+    "/ search  f filter  n/N next/previous  j/k move  J/K scroll  Space toggle  c/e edit  m comments  d pager  o open  R remote  "
+    "p publish  r refresh  q quit"
 )
 FILE_FILTERS = ("all", "unchecked", "checked")
 DRACULA_ANSI_COLORS = {
@@ -57,6 +60,17 @@ class ReviewComment:
     marker_line: int
     target_line: int
     body: str
+
+
+@dataclass(frozen=True)
+class RemoteComment:
+    """A published review conversation note."""
+
+    path: str
+    line: int
+    author: str
+    body: str
+    created_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -278,6 +292,11 @@ def marker_only(line: str) -> bool:
     return REVIEW_MARKER_RE.match(line.strip()) is not None or LEGACY_MARKER_RE.match(line.strip()) is not None
 
 
+def review_marker_match(line: str) -> re.Match[str] | None:
+    """Return a review marker match for a line."""
+    return REVIEW_MARKER_RE.search(line) or LEGACY_MARKER_RE.search(line)
+
+
 def next_code_line(lines: list[str], start_index: int) -> int:
     """Return the next non-empty non-marker line number after a marker."""
     for index in range(start_index + 1, len(lines)):
@@ -308,7 +327,7 @@ def comments_in_file(path: str) -> list[ReviewComment]:
     lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
     comments: list[ReviewComment] = []
     for index, line in enumerate(lines):
-        match = REVIEW_MARKER_RE.search(line) or LEGACY_MARKER_RE.search(line)
+        match = review_marker_match(line)
         if match is None:
             continue
         body = match.group("body").strip()
@@ -340,6 +359,45 @@ def comments_by_path(files: Sequence[ChangedFile]) -> dict[str, list[ReviewComme
         if path_comments:
             comments[changed_file.path] = path_comments
     return comments
+
+
+def remove_published_markers_from_file(path: str, published_ids: set[str]) -> int:
+    """Remove standalone local review marker lines by comment ID."""
+    file_path = Path(path)
+    if not file_path.is_file():
+        return 0
+
+    lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    kept_lines: list[str] = []
+    removed = 0
+    for index, line in enumerate(lines):
+        match = review_marker_match(line)
+        if match is None or not marker_only(line):
+            kept_lines.append(line)
+            continue
+
+        comment = ReviewComment(
+            path=path,
+            marker_line=index + 1,
+            target_line=adjusted_target_line(lines, index),
+            body=match.group("body").strip(),
+        )
+        if comment_id(comment) in published_ids:
+            removed += 1
+            continue
+        kept_lines.append(line)
+
+    if removed:
+        file_path.write_text("\n".join(kept_lines) + ("\n" if kept_lines else ""), encoding="utf-8")
+    return removed
+
+
+def remove_published_markers(comments: Sequence[ReviewComment]) -> int:
+    """Remove standalone local markers for published comments."""
+    ids_by_path: dict[str, set[str]] = {}
+    for comment in comments:
+        ids_by_path.setdefault(comment.path, set()).add(comment_id(comment))
+    return sum(remove_published_markers_from_file(path, ids) for path, ids in ids_by_path.items())
 
 
 def changed_new_lines(base: str, path: str) -> set[int]:
@@ -512,6 +570,15 @@ def detect_provider() -> str | None:
     return None
 
 
+def open_review_request(provider: str) -> bool:
+    """Open the current merge or pull request in the browser."""
+    if provider == "gitlab":
+        return call(["glab", "mr", "view", "--web"]) == 0
+    if provider == "github":
+        return call(["gh", "pr", "view", "--web"]) == 0
+    die(f"unsupported provider: {provider}")
+
+
 def gitlab_project_path() -> str:
     """Return the GitLab project path from glab."""
     data = json.loads(run(["glab", "repo", "view", "--output", "json"]))
@@ -538,25 +605,90 @@ def gitlab_latest_version(project: str, iid: str) -> dict[str, Any]:
     return versions[0]
 
 
+def author_name(value: dict[str, Any]) -> str:
+    """Return a display name from a provider author object."""
+    return str(value.get("username") or value.get("login") or value.get("name") or "unknown")
+
+
+def remote_comments_by_path(comments: Sequence[RemoteComment]) -> dict[str, list[RemoteComment]]:
+    """Return remote comments grouped by file path."""
+    grouped: dict[str, list[RemoteComment]] = {}
+    for comment in comments:
+        grouped.setdefault(comment.path, []).append(comment)
+    return grouped
+
+
+def fallback_remote_comment(
+    body: str,
+    author: str,
+    created_at: str = "",
+) -> RemoteComment | None:
+    """Parse a fallback provider comment body into a remote comment."""
+    match = FALLBACK_BODY_RE.match(body)
+    if match is None:
+        return None
+    return RemoteComment(
+        path=match.group("path"),
+        line=int(match.group("line")),
+        author=author,
+        body=match.group("body").strip(),
+        created_at=created_at,
+    )
+
+
+def fetch_gitlab_comments() -> list[RemoteComment]:
+    """Fetch GitLab MR discussion notes."""
+    project = gitlab_project_path()
+    iid = gitlab_mr_iid()
+    discussions = json.loads(run(["glab", "api", f"projects/{project}/merge_requests/{iid}/discussions"]))
+    comments: list[RemoteComment] = []
+    for discussion in discussions:
+        discussion_path = ""
+        discussion_line = 0
+        for note in discussion.get("notes", []):
+            body = str(note.get("body") or "")
+            author = author_name(note.get("author") or {})
+            created_at = str(note.get("created_at") or "")
+            position = note.get("position") or {}
+            path = position.get("new_path") or position.get("old_path") or discussion_path
+            line = position.get("new_line") or position.get("old_line") or discussion_line
+            if path:
+                discussion_path = str(path)
+            if line:
+                discussion_line = int(line)
+            if note.get("system"):
+                continue
+            if not path or not line:
+                fallback = fallback_remote_comment(body, author, created_at)
+                if fallback is not None:
+                    comments.append(fallback)
+                continue
+            comments.append(
+                RemoteComment(
+                    path=str(path),
+                    line=int(line),
+                    author=author,
+                    body=body,
+                    created_at=created_at,
+                )
+            )
+    return comments
+
+
 def fallback_body(comment: ReviewComment) -> str:
     """Return a general discussion body for providers that reject positioned comments."""
     return f"{comment.path}:{comment.target_line}\n\n{comment.body}"
 
 
-def publish_gitlab_comment(comment: ReviewComment, project: str, iid: str, version: dict[str, Any]) -> None:
+def publish_gitlab_comment(
+    comment: ReviewComment,
+    project: str,
+    iid: str,
+    version: dict[str, Any],
+    *,
+    positioned: bool,
+) -> None:
     """Publish one comment as a GitLab MR discussion."""
-    payload = {
-        "body": comment.body,
-        "position": {
-            "position_type": "text",
-            "base_sha": version["base_commit_sha"],
-            "start_sha": version["start_commit_sha"],
-            "head_sha": version["head_commit_sha"],
-            "new_path": comment.path,
-            "old_path": comment.path,
-            "new_line": comment.target_line,
-        },
-    }
     command = [
         "glab",
         "api",
@@ -568,15 +700,29 @@ def publish_gitlab_comment(comment: ReviewComment, project: str, iid: str, versi
         "--input",
         "-",
     ]
-    success, output = try_run(command, input_text=json.dumps(payload))
-    if success:
-        print(f"posted gitlab {comment.path}:{comment.target_line}")
-        return
+    output = ""
+    if positioned:
+        payload = {
+            "body": comment.body,
+            "position": {
+                "position_type": "text",
+                "base_sha": version["base_commit_sha"],
+                "start_sha": version["start_commit_sha"],
+                "head_sha": version["head_commit_sha"],
+                "new_path": comment.path,
+                "old_path": comment.path,
+                "new_line": comment.target_line,
+            },
+        }
+        success, output = try_run(command, input_text=json.dumps(payload))
+        if success:
+            print(f"posted gitlab {comment.path}:{comment.target_line}")
+            return
 
     fallback_success, fallback_output = try_run(command, input_text=json.dumps({"body": fallback_body(comment)}))
     if not fallback_success:
         die(f"could not publish GitLab comment at {comment.path}:{comment.target_line}\n{output}\n{fallback_output}")
-    print(f"posted gitlab draft fallback {comment.path}:{comment.target_line}")
+    print(f"posted gitlab fallback {comment.path}:{comment.target_line}")
 
 
 def github_repo() -> str:
@@ -590,30 +736,81 @@ def github_pr() -> dict[str, Any]:
     return json.loads(run(["gh", "pr", "view", "--json", "number,headRefOid"]))
 
 
-def publish_github_comment(comment: ReviewComment, repo: str, number: str, commit_id: str) -> None:
+def fetch_github_comments() -> list[RemoteComment]:
+    """Fetch GitHub PR review comments."""
+    repo = github_repo()
+    pr = github_pr()
+    number = str(pr["number"])
+    raw_comments = json.loads(run(["gh", "api", f"repos/{repo}/pulls/{number}/comments"]))
+    comments: list[RemoteComment] = []
+    for comment in raw_comments:
+        path = comment.get("path")
+        line = comment.get("line") or comment.get("original_line")
+        if not path or not line:
+            continue
+        comments.append(
+            RemoteComment(
+                path=str(path),
+                line=int(line),
+                author=author_name(comment.get("user") or {}),
+                body=str(comment.get("body") or ""),
+                created_at=str(comment.get("created_at") or ""),
+            )
+        )
+    issue_comments = json.loads(run(["gh", "api", f"repos/{repo}/issues/{number}/comments"]))
+    for comment in issue_comments:
+        fallback = fallback_remote_comment(
+            str(comment.get("body") or ""),
+            author_name(comment.get("user") or {}),
+            str(comment.get("created_at") or ""),
+        )
+        if fallback is not None:
+            comments.append(fallback)
+    return comments
+
+
+def fetch_remote_comments(provider: str) -> list[RemoteComment]:
+    """Fetch published review comments for a provider."""
+    if provider == "gitlab":
+        return fetch_gitlab_comments()
+    if provider == "github":
+        return fetch_github_comments()
+    die(f"unsupported provider: {provider}")
+
+
+def publish_github_comment(
+    comment: ReviewComment,
+    repo: str,
+    number: str,
+    commit_id: str,
+    *,
+    positioned: bool,
+) -> None:
     """Publish one comment as a GitHub PR review comment."""
-    payload = {
-        "body": comment.body,
-        "commit_id": commit_id,
-        "path": comment.path,
-        "line": comment.target_line,
-        "side": "RIGHT",
-    }
-    command = [
-        "gh",
-        "api",
-        f"repos/{repo}/pulls/{number}/comments",
-        "--method",
-        "POST",
-        "--header",
-        "Content-Type: application/json",
-        "--input",
-        "-",
-    ]
-    success, output = try_run(command, input_text=json.dumps(payload))
-    if success:
-        print(f"posted github {comment.path}:{comment.target_line}")
-        return
+    output = ""
+    if positioned:
+        payload = {
+            "body": comment.body,
+            "commit_id": commit_id,
+            "path": comment.path,
+            "line": comment.target_line,
+            "side": "RIGHT",
+        }
+        command = [
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{number}/comments",
+            "--method",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--input",
+            "-",
+        ]
+        success, output = try_run(command, input_text=json.dumps(payload))
+        if success:
+            print(f"posted github {comment.path}:{comment.target_line}")
+            return
 
     fallback_command = [
         "gh",
@@ -632,58 +829,72 @@ def publish_github_comment(comment: ReviewComment, repo: str, number: str, commi
     )
     if not fallback_success:
         die(f"could not publish GitHub comment at {comment.path}:{comment.target_line}\n{output}\n{fallback_output}")
-    print(f"posted github draft fallback {comment.path}:{comment.target_line}")
+    print(f"posted github fallback {comment.path}:{comment.target_line}")
 
 
-def publish_comments(base: str, provider: str, dry_run: bool) -> None:
+def publish_comments(base: str, provider: str, dry_run: bool, *, force: bool = False) -> list[ReviewComment]:
     """Publish local review comments to a provider."""
     files = changed_files(base)
     all_comments = collect_comments(files)
     if not all_comments:
         print("No #review comments found.")
-        return
+        return []
 
     state = load_state(base)
     published = published_comment_ids(state)
-    comments = [comment for comment in all_comments if comment_id(comment) not in published]
+    comments = all_comments if force else [comment for comment in all_comments if comment_id(comment) not in published]
     skipped = len(all_comments) - len(comments)
     if skipped:
         print(f"Skipping {skipped} already published comment{'s' if skipped != 1 else ''}.")
     if not comments:
         print("No unpublished #review comments found.")
-        return
+        return []
 
     lines_by_path = changed_lines_by_path(base, {comment.path for comment in comments})
     bad_comments = [comment for comment in comments if comment.target_line not in lines_by_path[comment.path]]
     if bad_comments:
-        print("These comments do not point at changed lines and may be rejected:")
+        print("These comments do not point at changed lines; they will use fallback comments:")
         for comment in bad_comments:
             print(f"- {comment.path}:{comment.target_line}: {comment.body}")
-        if not dry_run:
-            die("move comments onto changed lines or run with --dry-run to inspect")
 
     if dry_run:
         for comment in comments:
             print(f"{provider} {comment.path}:{comment.target_line}: {comment.body}")
-        return
+        return []
 
+    published_comments: list[ReviewComment] = []
     if provider == "gitlab":
         project = gitlab_project_path()
         iid = gitlab_mr_iid()
         version = gitlab_latest_version(project, iid)
         for comment in comments:
-            publish_gitlab_comment(comment, project, iid, version)
+            publish_gitlab_comment(
+                comment,
+                project,
+                iid,
+                version,
+                positioned=comment.target_line in lines_by_path[comment.path],
+            )
             mark_comment_published(base, state, comment)
+            published_comments.append(comment)
     elif provider == "github":
         repo = github_repo()
         pr = github_pr()
         number = str(pr["number"])
         commit_id = str(pr["headRefOid"])
         for comment in comments:
-            publish_github_comment(comment, repo, number, commit_id)
+            publish_github_comment(
+                comment,
+                repo,
+                number,
+                commit_id,
+                positioned=comment.target_line in lines_by_path[comment.path],
+            )
             mark_comment_published(base, state, comment)
+            published_comments.append(comment)
     else:
         die(f"unsupported provider: {provider}")
+    return published_comments
 
 
 def add_text(window: curses.window, y: int, x: int, text: str, width: int, mode: int = 0) -> None:
@@ -903,6 +1114,30 @@ def add_styled_text(
         used += len(text)
 
 
+def wrap_text(text: str, width: int) -> list[str]:
+    """Wrap text to a fixed terminal width."""
+    if width <= 1:
+        return [text]
+    lines: list[str] = []
+    for raw_line in text.splitlines() or [""]:
+        line = raw_line
+        while len(line) > width:
+            lines.append(line[:width])
+            line = line[width:]
+        lines.append(line)
+    return lines
+
+
+def plain_popup_lines(messages: Sequence[str], width: int) -> list[tuple[str, int]]:
+    """Return wrapped popup lines using the normal foreground color."""
+    lines: list[tuple[str, int]] = []
+    mode = color_pair(theme_color("foreground"))
+    for message in messages:
+        for wrapped in wrap_text(message, width):
+            lines.append((wrapped, mode))
+    return lines or [("", mode)]
+
+
 def prompt(window: curses.window, label: str) -> str | None:
     """Read a short prompt from the bottom status line."""
     curses.noecho()
@@ -959,6 +1194,7 @@ class ReviewApp:
         self.state: dict[str, Any] = {}
         self.reviewed: set[str] = set()
         self.comments_by_path: dict[str, list[ReviewComment]] = {}
+        self.remote_comments_by_path: dict[str, list[RemoteComment]] = {}
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
@@ -1012,6 +1248,7 @@ class ReviewApp:
         curses.curs_set(0)
         self.screen.keypad(True)
         self.reload()
+        self.load_startup_remote_comments()
         while True:
             curses.curs_set(1 if self.search_active else 0)
             self.draw()
@@ -1036,6 +1273,8 @@ class ReviewApp:
             self.toggle_current()
         elif key in {ord("c"), ord("e"), curses.KEY_ENTER, 10, 13}:
             self.edit_current()
+        elif key == ord("m"):
+            self.show_comments_popup()
         elif key == ord("d"):
             self.open_current_diff()
         elif key == ord("/"):
@@ -1043,8 +1282,16 @@ class ReviewApp:
             self.message = "Search mode. Enter accepts, Esc leaves, Ctrl-U clears."
         elif key == ord("f"):
             self.cycle_file_filter()
+        elif key == ord("n"):
+            self.jump_unreviewed(1)
+        elif key == ord("N"):
+            self.jump_unreviewed(-1)
         elif key == 21:
             self.clear_search()
+        elif key == ord("o"):
+            self.open_review_request()
+        elif key == ord("R"):
+            self.refresh_remote_comments()
         elif key == ord("p"):
             self.publish_dry_run()
         elif key == ord("r"):
@@ -1113,6 +1360,23 @@ class ReviewApp:
         self.diff_scroll = 0
         self.message = f"Showing {self.file_filter} files."
 
+    def jump_unreviewed(self, step: int) -> None:
+        """Jump to an unchecked file without changing filters."""
+        files = self.visible_files()
+        if not files:
+            return
+
+        total = len(files)
+        for offset in range(1, total + 1):
+            index = (self.selected + (offset * step)) % total
+            if files[index].path not in self.reviewed:
+                self.selected = index
+                self.diff_scroll = 0
+                direction = "Next" if step > 0 else "Previous"
+                self.message = f"{direction}: {files[index].path}"
+                return
+        self.message = "No unreviewed files in current view."
+
     def toggle_current(self) -> None:
         """Toggle reviewed state for the selected file."""
         current = self.selected_file()
@@ -1141,28 +1405,189 @@ class ReviewApp:
         self.message = f"Viewed diff for {current.path}."
 
     def publish_dry_run(self) -> None:
-        """Publish or dry-run comments outside curses."""
+        """Publish or dry-run comments and show the result in a popup."""
         provider = detect_provider()
         if provider is None:
-            self.message = "Publish cancelled: could not detect GitLab/GitHub remote."
+            self.message = "Ready."
+            self.show_text_popup("publish", ["Could not detect GitLab/GitHub remote."])
             return
         publish_for_real = confirm_publish(self.screen, provider)
         if publish_for_real is None:
-            self.message = "Publish cancelled."
+            self.message = "Ready."
+            self.show_text_popup("publish", ["Publish cancelled."])
             return
         dry_run = not publish_for_real
-        self.suspend(lambda: publish_comments(self.base, provider, dry_run=dry_run), wait=True)
-        mode = "dry-run" if dry_run else "publish"
-        self.message = f"{provider} {mode} finished."
+        self.message = f"Publishing to {provider}..."
+        self.draw()
+        output = StringIO()
+        published: list[ReviewComment] = []
+        removed = 0
+        failed = False
+        with redirect_stdout(output), redirect_stderr(output):
+            try:
+                published = publish_comments(self.base, provider, dry_run=dry_run)
+                removed = remove_published_markers(published) if published else 0
+                if published:
+                    self.reload()
+                    self.load_remote_comments(provider)
+            except SystemExit:
+                failed = True
+            except Exception as error:
+                failed = True
+                print(f"review2: {error}", file=sys.stderr)
 
-    def suspend(self, action: Any, *, wait: bool = False) -> None:
+        mode = "dry-run" if dry_run else "publish"
+        messages = output.getvalue().splitlines()
+        if removed:
+            messages.append(f"Removed {removed} local review marker{'s' if removed != 1 else ''}.")
+        if not messages:
+            messages.append(f"{provider} {mode} finished.")
+        title = "publish failed" if failed else f"{provider} {mode}"
+        self.message = "Ready."
+        self.show_text_popup(title, messages)
+
+    def open_review_request(self) -> None:
+        """Open the detected merge or pull request in the browser."""
+        provider = detect_provider()
+        if provider is None:
+            self.message = "Open cancelled: could not detect GitLab/GitHub remote."
+            return
+        opened = self.suspend(lambda: open_review_request(provider))
+        self.message = f"Opened {provider} review." if opened else f"Could not open {provider} review."
+
+    def load_remote_comments(self, provider: str) -> None:
+        """Load remote comments into the TUI cache."""
+        self.remote_comments_by_path = remote_comments_by_path(fetch_remote_comments(provider))
+
+    def try_load_remote_comments(self, provider: str) -> tuple[bool, str]:
+        """Load remote comments and return success plus a status message."""
+        output = StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            try:
+                self.load_remote_comments(provider)
+            except SystemExit:
+                detail = output.getvalue().strip().splitlines()
+                message = detail[-1] if detail else f"Could not load {provider} comments."
+                return False, message
+            except Exception as error:
+                return False, f"review2: {error}"
+
+        total = sum(len(comments) for comments in self.remote_comments_by_path.values())
+        return True, f"Loaded {total} remote comment{'s' if total != 1 else ''}."
+
+    def load_startup_remote_comments(self) -> None:
+        """Load remote comments automatically when the TUI starts."""
+        provider = detect_provider()
+        if provider is None:
+            return
+        self.message = f"Loading {provider} comments..."
+        self.draw()
+        success, message = self.try_load_remote_comments(provider)
+        self.message = message if success else f"Remote comments not loaded: {message}"
+
+    def refresh_remote_comments(self) -> None:
+        """Refresh remote MR/PR comments."""
+        provider = detect_provider()
+        if provider is None:
+            self.message = "Remote refresh cancelled: could not detect GitLab/GitHub remote."
+            return
+        self.message = f"Loading {provider} comments..."
+        self.draw()
+        success, message = self.try_load_remote_comments(provider)
+        self.message = message if success else f"Remote refresh failed: {message}"
+
+    def selected_comment_lines(self, width: int) -> list[tuple[str, int]]:
+        """Return wrapped comments for the selected file."""
+        current = self.selected_file()
+        if current is None:
+            return [("No file selected.", color_pair(theme_color("comment")))]
+
+        lines: list[tuple[str, int]] = []
+        local_comments = self.comments_by_path.get(current.path, [])
+        remote_comments = self.remote_comments_by_path.get(current.path, [])
+        for comment in local_comments:
+            header = f"local line {comment.target_line}"
+            lines.append((header, curses.A_BOLD | color_pair(theme_color("yellow"))))
+            for wrapped in wrap_text(comment.body, width):
+                lines.append((wrapped, color_pair(theme_color("foreground"))))
+            lines.append(("", 0))
+        for comment in remote_comments:
+            header = f"remote line {comment.line} @{comment.author}"
+            lines.append((header, curses.A_BOLD | color_pair(theme_color("green"))))
+            for wrapped in wrap_text(comment.body, width):
+                lines.append((wrapped, color_pair(theme_color("foreground"))))
+            lines.append(("", 0))
+        return lines or [("No comments for this file.", color_pair(theme_color("comment")))]
+
+    def show_comments_popup(self) -> None:
+        """Show scrollable comments for the selected file."""
+        self.show_scroll_popup("comments", self.selected_comment_lines)
+
+    def show_text_popup(self, title: str, messages: Sequence[str]) -> None:
+        """Show plain text messages in a scrollable popup."""
+        def line_factory(width: int) -> Sequence[tuple[str, int]]:
+            """Return wrapped lines for this popup."""
+            return plain_popup_lines(messages, width)
+
+        self.show_scroll_popup(title, line_factory)
+
+    def show_scroll_popup(self, title: str, line_factory: Callable[[int], Sequence[tuple[str, int]]]) -> None:
+        """Show styled lines in a scrollable popup."""
+        self.draw()
+        height, width = self.screen.getmaxyx()
+        popup_height = max(8, min(height - 4, int(height * 0.75)))
+        popup_width = max(50, min(width - 4, int(width * 0.85)))
+        top = max(1, (height - popup_height) // 2)
+        left = max(1, (width - popup_width) // 2)
+        content_width = popup_width - 4
+        content_height = popup_height - 4
+        scroll = 0
+
+        while True:
+            lines = list(line_factory(content_width))
+            max_scroll = max(0, len(lines) - content_height)
+            scroll = max(0, min(scroll, max_scroll))
+            popup = curses.newwin(popup_height, popup_width, top, left)
+            popup.erase()
+            popup.box()
+            add_text(popup, 0, 2, f" {title} ", popup_width - 4, curses.A_BOLD | color_pair(theme_color("purple")))
+            add_text(
+                popup,
+                popup_height - 2,
+                2,
+                "j/k scroll  J/K page  q/Esc close".ljust(popup_width - 4),
+                popup_width - 4,
+                color_pair(theme_color("comment")),
+            )
+            for row in range(content_height):
+                index = scroll + row
+                if index >= len(lines):
+                    break
+                text, mode = lines[index]
+                add_text(popup, row + 2, 2, text.ljust(content_width), content_width, mode)
+            popup.refresh()
+            key = popup.getch()
+            if key in {ord("q"), 27, curses.KEY_ENTER, 10, 13}:
+                self.draw()
+                return
+            if key in {ord("j"), curses.KEY_DOWN}:
+                scroll += 1
+            elif key in {ord("k"), curses.KEY_UP}:
+                scroll -= 1
+            elif key in {ord("J"), curses.KEY_NPAGE}:
+                scroll += content_height
+            elif key in {ord("K"), curses.KEY_PPAGE}:
+                scroll -= content_height
+
+    def suspend(self, action: Any, *, wait: bool = False) -> Any:
         """Temporarily leave curses to run an external command."""
         curses.def_prog_mode()
         curses.endwin()
         try:
-            action()
+            result = action()
             if wait:
                 input("\npress enter to return to review2 ")
+            return result
         finally:
             curses.reset_prog_mode()
             curses.curs_set(0)
@@ -1281,13 +1706,22 @@ class ReviewApp:
         add_text(self.screen, y, x, "Comments".ljust(width), width, curses.A_BOLD | color_pair(theme_color("cyan")))
         if current is None:
             return
-        comments = self.comments_by_path.get(current.path, [])
-        if not comments:
+        local_comments = self.comments_by_path.get(current.path, [])
+        remote_comments = self.remote_comments_by_path.get(current.path, [])
+        if not local_comments and not remote_comments:
             add_text(self.screen, y + 1, x, "No #review comments in this file.", width)
             return
-        for row, comment in enumerate(comments[: max(0, height - 1)], 1):
-            text = f"{comment.target_line}: {comment.body}"
-            add_text(self.screen, y + row, x, text.ljust(width), width, color_pair(theme_color("yellow")))
+
+        local_count = len(local_comments)
+        remote_count = len(remote_comments)
+        summary = f"{local_count} local / {remote_count} remote"
+        add_text(self.screen, y + 1, x, summary.ljust(width), width, color_pair(theme_color("foreground")))
+        if height > 2 and local_comments:
+            local_lines = ", ".join(str(comment.target_line) for comment in local_comments)
+            add_text(self.screen, y + 2, x, f"local lines: {local_lines}".ljust(width), width, color_pair(theme_color("yellow")))
+        if height > 3 and remote_comments:
+            remote_lines = ", ".join(str(comment.line) for comment in remote_comments)
+            add_text(self.screen, y + 3, x, f"remote lines: {remote_lines}".ljust(width), width, color_pair(theme_color("green")))
 
 
 def interactive(base: str) -> None:
@@ -1304,6 +1738,7 @@ def parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="show changed files and reviewed checkboxes")
     subparsers.add_parser("comments", help="show local #review comments")
     subparsers.add_parser("ui", help="open the interactive CLI app")
+    subparsers.add_parser("open", help="open the current merge/pull request in the browser")
 
     diff_parser = subparsers.add_parser("diff", help="show a side-by-side diff for a changed file")
     diff_parser.add_argument("file", help="changed file path or list number")
@@ -1317,6 +1752,7 @@ def parser() -> argparse.ArgumentParser:
     publish_parser = subparsers.add_parser("publish", help="publish #review comments to a merge/pull request")
     publish_parser.add_argument("--provider", choices=["auto", "gitlab", "github"], default="auto")
     publish_parser.add_argument("--dry-run", action="store_true")
+    publish_parser.add_argument("--force", action="store_true", help="publish even if local state says comments were published")
 
     return argument_parser
 
@@ -1358,11 +1794,20 @@ def main() -> None:
         open_file(resolve_path(changed_files(base), args.file))
     elif args.command == "toggle":
         toggle_reviewed(base, resolve_path(changed_files(base), args.file))
+    elif args.command == "open":
+        provider = detect_provider()
+        if provider is None:
+            die("could not detect provider from git remote")
+        if not open_review_request(provider):
+            die(f"could not open {provider} review")
     elif args.command == "publish":
         provider = detect_provider() if args.provider == "auto" else args.provider
         if provider is None:
             die("could not detect provider from git remote; pass --provider gitlab or --provider github")
-        publish_comments(base, provider, args.dry_run)
+        published = publish_comments(base, provider, args.dry_run, force=args.force)
+        removed = remove_published_markers(published) if published else 0
+        if removed:
+            print(f"Removed {removed} local review marker{'s' if removed != 1 else ''}.")
 
 
 if __name__ == "__main__":
