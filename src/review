@@ -14,8 +14,10 @@ removes successfully published standalone marker lines from the working tree.
 Inline markers are left untouched.
 
 Remote discussions are auto-loaded when the UI starts and can be refreshed with
-R. The comments popup groups remote notes into threads, highlights replies, and
-allows replying to a selected remote comment from inside the tool.
+R. The comments popup groups published notes and visible pending review drafts
+into threads, highlights replies, and allows replying to a selected remote
+comment from inside the tool. Reply drafts are saved in the same review state
+file and can be published later from the comments popup.
 
 Useful keys in the UI:
 - / starts regex file search.
@@ -24,7 +26,12 @@ Useful keys in the UI:
 - n/N jumps to the next or previous unreviewed file.
 - c/e opens the selected file in the configured editor.
 - d opens the selected diff in the pager.
-- m opens the threaded comments popup; Up/Down or j/k select comments, r replies.
+- m opens the threaded comments popup; Up/Down or j/k select comments and draft
+  rows, a saves a reply draft or edits the selected draft, P publishes the
+  selected draft or all visible drafts, A applies the selected suggestion to the
+  working tree, u undoes the last applied suggestion, x deletes the selected
+  draft, r replies now, s toggles GitLab resolution, y copies the selected body,
+  and g jumps to code.
 - o opens the current GitLab MR or GitHub PR in the browser.
 - p publishes local #review markers, with output shown in a popup.
 
@@ -47,9 +54,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import sys
+import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
@@ -63,6 +72,10 @@ LEGACY_MARKER_RE = re.compile(r"\breview:\s*(?P<body>.*)$")
 MARKER_RE = re.compile(r"(?:#|//|--|;|/\*|\*)\s*review\b:?.*$|\breview:\s*.*$", re.IGNORECASE)
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 FALLBACK_BODY_RE = re.compile(r"^(?P<path>.+):(?P<line>\d+)\n\n(?P<body>.*)$", re.DOTALL)
+SUGGESTION_BLOCK_RE = re.compile(
+    r"(?ms)^```suggestion(?P<meta>[^\n`]*)\n(?P<body>.*?)(?:\n```|\Z)"
+)
+SUGGESTION_RANGE_RE = re.compile(r":(?P<start>[+-]?\d+)(?P<end>[+-]\d+)")
 BASIC_ANSI_COLOR_CODES = {*range(30, 38), *range(90, 98)}
 HELP_TEXT = (
     "/ search  f filter  n/N next/previous  j/k move  J/K scroll  Space toggle  c/e edit  m comments  d pager  o open  R remote  "
@@ -111,6 +124,7 @@ class RemoteNote:
     note_id: str = ""
     created_at: str = ""
     is_reply: bool = False
+    start_line: int = 0
 
 
 @dataclass(frozen=True)
@@ -123,6 +137,7 @@ class RemoteThread:
     notes: tuple[RemoteNote, ...]
     resolved: bool = False
     replyable: bool = True
+    pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -131,6 +146,49 @@ class ReplyTarget:
 
     thread: RemoteThread
     note: RemoteNote
+
+
+@dataclass(frozen=True)
+class ReplyDraft:
+    """A local draft reply for a remote review note."""
+
+    draft_id: str
+    thread_id: str
+    note_id: str
+    path: str
+    line: int
+    body: str
+
+
+@dataclass(frozen=True)
+class ReviewSuggestion:
+    """A suggested code replacement from a remote review note."""
+
+    suggestion_id: str
+    path: str
+    start_line: int
+    end_line: int
+    body: str
+
+
+@dataclass(frozen=True)
+class SuggestionUndo:
+    """A stored file snapshot before applying a suggestion."""
+
+    path: str
+    content: str
+    suggestion_id: str
+    start_line: int
+    end_line: int
+
+
+@dataclass(frozen=True)
+class CommentPopupSelection:
+    """A selectable comment popup row."""
+
+    target: ReplyTarget
+    draft: ReplyDraft | None = None
+    suggestion: ReviewSuggestion | None = None
 
 
 @dataclass(frozen=True)
@@ -309,6 +367,230 @@ def reviewed_paths(state: dict[str, Any]) -> set[str]:
 def published_comment_ids(state: dict[str, Any]) -> set[str]:
     """Return published review comment IDs from state."""
     return set(state.get("published", []))
+
+
+def reply_drafts(state: dict[str, Any]) -> list[ReplyDraft]:
+    """Return saved reply drafts from state."""
+    drafts: list[ReplyDraft] = []
+    for raw_draft in state.get("reply_drafts", []):
+        if not isinstance(raw_draft, dict):
+            continue
+        body = str(raw_draft.get("body") or "").strip()
+        path = str(raw_draft.get("path") or "")
+        thread_id = str(raw_draft.get("thread_id") or "")
+        if not body or not path or not thread_id:
+            continue
+        try:
+            line = int(raw_draft.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        drafts.append(
+            ReplyDraft(
+                draft_id=str(raw_draft.get("draft_id") or ""),
+                thread_id=thread_id,
+                note_id=str(raw_draft.get("note_id") or ""),
+                path=path,
+                line=line,
+                body=body,
+            )
+        )
+    return drafts
+
+
+def reply_draft_id(draft: ReplyDraft) -> str:
+    """Return a stable ID for a reply draft."""
+    payload = {
+        "body": draft.body,
+        "note_id": draft.note_id,
+        "path": draft.path,
+        "thread_id": draft.thread_id,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha1(encoded).hexdigest()
+
+
+def reply_draft_state(draft: ReplyDraft) -> dict[str, Any]:
+    """Return a JSON-serializable reply draft."""
+    draft_id = draft.draft_id or reply_draft_id(draft)
+    return {
+        "body": draft.body,
+        "draft_id": draft_id,
+        "line": draft.line,
+        "note_id": draft.note_id,
+        "path": draft.path,
+        "thread_id": draft.thread_id,
+    }
+
+
+def save_reply_drafts(base: str, drafts: Sequence[ReplyDraft]) -> None:
+    """Persist reply drafts in review state."""
+    state = load_state(base)
+    state["reply_drafts"] = [reply_draft_state(draft) for draft in drafts]
+    save_state(base, state)
+
+
+def add_reply_draft(base: str, target: ReplyTarget, body: str) -> ReplyDraft:
+    """Add a reply draft for a remote review note."""
+    draft = ReplyDraft(
+        draft_id="",
+        thread_id=target.thread.thread_id,
+        note_id=target.note.note_id,
+        path=target.thread.path,
+        line=target.thread.line,
+        body=body.strip(),
+    )
+    saved_draft = ReplyDraft(
+        draft_id=reply_draft_id(draft),
+        thread_id=draft.thread_id,
+        note_id=draft.note_id,
+        path=draft.path,
+        line=draft.line,
+        body=draft.body,
+    )
+    existing_drafts = [
+        existing_draft
+        for existing_draft in reply_drafts(load_state(base))
+        if existing_draft.draft_id != saved_draft.draft_id
+    ]
+    save_reply_drafts(base, [*existing_drafts, saved_draft])
+    return saved_draft
+
+
+def update_reply_draft_body(base: str, draft: ReplyDraft, body: str) -> ReplyDraft:
+    """Replace an existing reply draft body and persist it."""
+    draft_id = draft.draft_id or reply_draft_id(draft)
+    updated = ReplyDraft(
+        draft_id=draft_id,
+        thread_id=draft.thread_id,
+        note_id=draft.note_id,
+        path=draft.path,
+        line=draft.line,
+        body=body.strip(),
+    )
+    replaced = False
+    updated_drafts: list[ReplyDraft] = []
+    for existing_draft in reply_drafts(load_state(base)):
+        if existing_draft.draft_id == draft_id:
+            updated_drafts.append(updated)
+            replaced = True
+        else:
+            updated_drafts.append(existing_draft)
+    if not replaced:
+        updated_drafts.append(updated)
+    save_reply_drafts(base, updated_drafts)
+    return updated
+
+
+def remove_reply_drafts(base: str, draft_ids: set[str]) -> int:
+    """Remove reply drafts by ID and return the number removed."""
+    drafts = reply_drafts(load_state(base))
+    kept = [draft for draft in drafts if draft.draft_id not in draft_ids]
+    save_reply_drafts(base, kept)
+    return len(drafts) - len(kept)
+
+
+def reply_draft_matches_target(draft: ReplyDraft, target: ReplyTarget) -> bool:
+    """Return whether a draft belongs to a selected remote note."""
+    return (
+        draft.thread_id == target.thread.thread_id
+        and draft.note_id == target.note.note_id
+        and draft.path == target.thread.path
+    )
+
+
+def suggestion_line_range(note: RemoteNote, meta: str) -> tuple[int, int]:
+    """Return the file line range replaced by a suggestion block."""
+    match = SUGGESTION_RANGE_RE.search(meta)
+    if match is not None:
+        start = note.line + int(match.group("start"))
+        end = note.line + int(match.group("end"))
+    else:
+        start = note.start_line or note.line
+        end = note.line
+    return max(1, min(start, end)), max(1, max(start, end))
+
+
+def suggestion_id(note: RemoteNote, index: int, body: str, start_line: int, end_line: int) -> str:
+    """Return a stable local ID for a remote suggestion block."""
+    payload = {
+        "body": body,
+        "end_line": end_line,
+        "index": index,
+        "note_id": note.note_id,
+        "path": note.path,
+        "start_line": start_line,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha1(encoded).hexdigest()
+
+
+def note_suggestions(note: RemoteNote) -> list[ReviewSuggestion]:
+    """Return suggestion blocks parsed from a remote note body."""
+    suggestions: list[ReviewSuggestion] = []
+    if not note.path or not note.line:
+        return suggestions
+    for index, match in enumerate(SUGGESTION_BLOCK_RE.finditer(note.body), 1):
+        body = match.group("body").rstrip("\n")
+        start_line, end_line = suggestion_line_range(note, match.group("meta").strip())
+        suggestions.append(
+            ReviewSuggestion(
+                suggestion_id=suggestion_id(note, index, body, start_line, end_line),
+                path=note.path,
+                start_line=start_line,
+                end_line=end_line,
+                body=body,
+            )
+        )
+    return suggestions
+
+
+def suggestion_undo(state: dict[str, Any]) -> SuggestionUndo | None:
+    """Return the last stored suggestion undo snapshot."""
+    raw_undo = state.get("suggestion_undo")
+    if not isinstance(raw_undo, dict):
+        return None
+    path = str(raw_undo.get("path") or "")
+    suggestion_id = str(raw_undo.get("suggestion_id") or "")
+    if not path or not suggestion_id:
+        return None
+    try:
+        start_line = int(raw_undo.get("start_line") or 0)
+        end_line = int(raw_undo.get("end_line") or 0)
+    except (TypeError, ValueError):
+        start_line = 0
+        end_line = 0
+    return SuggestionUndo(
+        path=path,
+        content=str(raw_undo.get("content") or ""),
+        suggestion_id=suggestion_id,
+        start_line=start_line,
+        end_line=end_line,
+    )
+
+
+def suggestion_undo_state(undo: SuggestionUndo) -> dict[str, Any]:
+    """Return a JSON-serializable suggestion undo snapshot."""
+    return {
+        "content": undo.content,
+        "end_line": undo.end_line,
+        "path": undo.path,
+        "start_line": undo.start_line,
+        "suggestion_id": undo.suggestion_id,
+    }
+
+
+def save_suggestion_undo(base: str, undo: SuggestionUndo) -> None:
+    """Persist the last suggestion undo snapshot."""
+    state = load_state(base)
+    state["suggestion_undo"] = suggestion_undo_state(undo)
+    save_state(base, state)
+
+
+def clear_suggestion_undo(base: str) -> None:
+    """Clear the stored suggestion undo snapshot."""
+    state = load_state(base)
+    state.pop("suggestion_undo", None)
+    save_state(base, state)
 
 
 def comment_id(comment: ReviewComment) -> str:
@@ -630,9 +912,106 @@ def side_by_side_diff_lines(base: str, path: str, width: int, branch: str | None
     return lines or ["No diff for this file."]
 
 
+def file_newline(text: str) -> str:
+    """Return the dominant newline sequence for a text file."""
+    return "\r\n" if "\r\n" in text else "\n"
+
+
+def replacement_lines(body: str, newline: str, keep_final_newline: bool) -> list[str]:
+    """Return file lines for a suggestion replacement body."""
+    if body == "":
+        return []
+    lines = [f"{line}{newline}" for line in body.split("\n")]
+    if not keep_final_newline and lines:
+        lines[-1] = lines[-1].removesuffix(newline)
+    return lines
+
+
+def build_suggestion_undo(suggestion: ReviewSuggestion) -> tuple[SuggestionUndo | None, str]:
+    """Return an undo snapshot before applying a suggestion."""
+    path = Path(suggestion.path)
+    if not path.exists():
+        return None, f"File not found: {suggestion.path}"
+    try:
+        content = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None, f"File is not UTF-8 text: {suggestion.path}"
+    return (
+        SuggestionUndo(
+            path=suggestion.path,
+            content=content,
+            suggestion_id=suggestion.suggestion_id,
+            start_line=suggestion.start_line,
+            end_line=suggestion.end_line,
+        ),
+        "",
+    )
+
+def apply_suggestion_to_file(suggestion: ReviewSuggestion) -> tuple[bool, str]:
+    """Apply a remote suggestion to the working tree."""
+    path = Path(suggestion.path)
+    if not path.exists():
+        return False, f"File not found: {suggestion.path}"
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return False, f"File is not UTF-8 text: {suggestion.path}"
+    lines = text.splitlines(keepends=True)
+    if suggestion.start_line < 1 or suggestion.end_line < suggestion.start_line:
+        return False, f"Invalid suggestion range: {suggestion.start_line}-{suggestion.end_line}"
+    if suggestion.end_line > len(lines):
+        return False, f"Suggestion range exceeds file length: {suggestion.start_line}-{suggestion.end_line}"
+
+    start_index = suggestion.start_line - 1
+    end_index = suggestion.end_line
+    newline = file_newline(text)
+    keep_final_newline = end_index < len(lines) or text.endswith(("\n", "\r\n"))
+    updated_lines = [
+        *lines[:start_index],
+        *replacement_lines(suggestion.body, newline, keep_final_newline),
+        *lines[end_index:],
+    ]
+    path.write_text("".join(updated_lines), encoding="utf-8")
+    return True, f"Applied suggestion to {suggestion.path}:{suggestion.start_line}-{suggestion.end_line}."
+
+
+def restore_suggestion_undo(base: str) -> tuple[bool, str]:
+    """Restore the last applied suggestion snapshot."""
+    undo = suggestion_undo(load_state(base))
+    if undo is None:
+        return False, "No applied suggestion to undo."
+    Path(undo.path).write_text(undo.content, encoding="utf-8")
+    clear_suggestion_undo(base)
+    return True, f"Undid suggestion for {undo.path}:{undo.start_line}-{undo.end_line}."
+
+
 def open_file(path: str) -> None:
     """Open a file in the configured editor."""
     call(editor_command(path))
+
+
+def edit_text(initial_text: str, *, suffix: str = ".md") -> tuple[bool, str]:
+    """Edit text in the configured editor and return the saved body."""
+    path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            prefix="review-draft-",
+            suffix=suffix,
+            delete=False,
+        ) as handle:
+            path = Path(handle.name)
+            handle.write(initial_text)
+            if initial_text and not initial_text.endswith("\n"):
+                handle.write("\n")
+        if call(editor_command(str(path))) != 0:
+            return False, initial_text
+        return True, path.read_text(encoding="utf-8").strip()
+    finally:
+        if path is not None:
+            path.unlink(missing_ok=True)
 
 
 def editor_command(path: str) -> list[str]:
@@ -773,6 +1152,7 @@ def thread_from_note(
     *,
     resolved: bool = False,
     replyable: bool = True,
+    pending: bool = False,
 ) -> RemoteThread:
     """Create a single-note remote thread."""
     return RemoteThread(
@@ -782,6 +1162,7 @@ def thread_from_note(
         notes=(note,),
         resolved=resolved,
         replyable=replyable,
+        pending=pending,
     )
 
 
@@ -791,6 +1172,15 @@ def provider_note_path_line(note: dict[str, Any], default_path: str, default_lin
     path = position.get("new_path") or position.get("old_path") or default_path
     line = position.get("new_line") or position.get("old_line") or default_line
     return str(path or ""), int(line or 0)
+
+
+def provider_note_start_line(note: dict[str, Any], fallback_line: int) -> int:
+    """Return the first line covered by a provider note position."""
+    position = note.get("position") or {}
+    line_range = position.get("line_range") or {}
+    start = line_range.get("start") or {}
+    start_line = start.get("new_line") or start.get("old_line") or position.get("start_line") or fallback_line
+    return int(start_line or fallback_line or 0)
 
 
 def gitlab_remote_note(note: dict[str, Any], path: str, line: int, *, is_reply: bool) -> RemoteNote:
@@ -803,6 +1193,7 @@ def gitlab_remote_note(note: dict[str, Any], path: str, line: int, *, is_reply: 
         note_id=str(note.get("id") or ""),
         created_at=str(note.get("created_at") or ""),
         is_reply=is_reply,
+        start_line=provider_note_start_line(note, line),
     )
 
 
@@ -847,6 +1238,56 @@ def fetch_gitlab_threads() -> list[RemoteThread]:
                     resolved=resolved,
                 )
             )
+    return [*threads, *fetch_gitlab_draft_threads(project, iid)]
+
+
+def gitlab_draft_note_thread(note: dict[str, Any], index: int) -> RemoteThread | None:
+    """Return a pending GitLab draft note as a remote thread."""
+    body = str(note.get("note") or note.get("body") or "")
+    created_at = str(note.get("created_at") or "")
+    path, line = provider_note_path_line(note, "", 0)
+    author = author_name(note.get("author") or {"username": "draft"})
+    if not path or not line:
+        fallback = fallback_remote_note(body, author, created_at)
+        if fallback is None:
+            return None
+        return thread_from_note(
+            f"draft-{note.get('id') or index}",
+            fallback,
+            replyable=False,
+            pending=True,
+        )
+
+    note_id = f"draft-{note.get('id') or index}"
+    remote_note = RemoteNote(
+        path=path,
+        line=line,
+        author=author,
+        body=body,
+        note_id=note_id,
+        created_at=created_at,
+        start_line=provider_note_start_line(note, line),
+    )
+    return thread_from_note(note_id, remote_note, replyable=False, pending=True)
+
+
+def fetch_gitlab_draft_threads(project: str, iid: str) -> list[RemoteThread]:
+    """Fetch pending GitLab review draft notes visible to the current user."""
+    success, output = try_run(["glab", "api", f"projects/{project}/merge_requests/{iid}/draft_notes"])
+    if not success:
+        return []
+    try:
+        draft_notes = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+
+    threads: list[RemoteThread] = []
+    for index, note in enumerate(draft_notes, 1):
+        if not isinstance(note, dict):
+            continue
+        thread = gitlab_draft_note_thread(note, index)
+        if thread is not None:
+            threads.append(thread)
     return threads
 
 
@@ -917,6 +1358,7 @@ def github_remote_note(comment: dict[str, Any]) -> RemoteNote | None:
     line = comment.get("line") or comment.get("original_line")
     if not path or not line:
         return None
+    start_line = comment.get("start_line") or comment.get("original_start_line") or line
     return RemoteNote(
         path=str(path),
         line=int(line),
@@ -924,6 +1366,7 @@ def github_remote_note(comment: dict[str, Any]) -> RemoteNote | None:
         body=str(comment.get("body") or ""),
         note_id=str(comment.get("id") or ""),
         created_at=str(comment.get("created_at") or ""),
+        start_line=int(start_line or line),
     )
 
 
@@ -937,6 +1380,7 @@ def remote_note_with_reply(note: RemoteNote, *, is_reply: bool) -> RemoteNote:
         note_id=note.note_id,
         created_at=note.created_at,
         is_reply=is_reply,
+        start_line=note.start_line,
     )
 
 
@@ -952,6 +1396,43 @@ def github_thread_notes(
         for nested_id in children_by_parent.get(child_id, []):
             notes.append(remote_note_with_reply(notes_by_id[nested_id], is_reply=True))
     return tuple(notes)
+
+
+def fetch_github_pending_review_threads(repo: str, number: str) -> list[RemoteThread]:
+    """Fetch pending GitHub review comments visible to the current user."""
+    success, output = try_run(["gh", "api", f"repos/{repo}/pulls/{number}/reviews"])
+    if not success:
+        return []
+    try:
+        reviews = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+
+    threads: list[RemoteThread] = []
+    for review in reviews:
+        if not isinstance(review, dict) or str(review.get("state") or "").upper() != "PENDING":
+            continue
+        review_id = str(review.get("id") or "")
+        if not review_id:
+            continue
+        comments_success, comments_output = try_run(
+            ["gh", "api", f"repos/{repo}/pulls/{number}/reviews/{review_id}/comments"]
+        )
+        if not comments_success:
+            continue
+        try:
+            comments = json.loads(comments_output)
+        except json.JSONDecodeError:
+            continue
+        for index, comment in enumerate(comments, 1):
+            if not isinstance(comment, dict):
+                continue
+            note = github_remote_note(comment)
+            if note is None:
+                continue
+            thread_id = f"pending-review-{review_id}-{note.note_id or index}"
+            threads.append(thread_from_note(thread_id, note, replyable=False, pending=True))
+    return threads
 
 
 def fetch_github_threads() -> list[RemoteThread]:
@@ -991,6 +1472,8 @@ def fetch_github_threads() -> list[RemoteThread]:
                 notes=notes,
             )
         )
+
+    threads.extend(fetch_github_pending_review_threads(repo, number))
 
     issue_comments = json.loads(run(["gh", "api", f"repos/{repo}/issues/{number}/comments"]))
     for index, comment in enumerate(issue_comments, 1):
@@ -1034,6 +1517,28 @@ def post_gitlab_reply(thread: RemoteThread, body: str) -> None:
     print(f"posted gitlab reply to thread {thread.thread_id}")
 
 
+def set_gitlab_thread_resolved(thread: RemoteThread, resolved: bool) -> None:
+    """Set the resolved state for an existing GitLab MR thread."""
+    project = gitlab_project_path()
+    iid = gitlab_mr_iid()
+    command = [
+        "glab",
+        "api",
+        f"projects/{project}/merge_requests/{iid}/discussions/{thread.thread_id}",
+        "--method",
+        "PUT",
+        "--header",
+        "Content-Type: application/json",
+        "--input",
+        "-",
+    ]
+    success, output = try_run(command, input_text=json.dumps({"resolved": resolved}))
+    if not success:
+        die(f"could not update GitLab thread {thread.thread_id}\n{output}")
+    state = "resolved" if resolved else "unresolved"
+    print(f"marked gitlab thread {thread.thread_id} {state}")
+
+
 def post_github_reply(thread: RemoteThread, note: RemoteNote, body: str) -> None:
     """Post a reply to an existing GitHub PR review comment."""
     if not thread.replyable or not note.note_id:
@@ -1066,6 +1571,24 @@ def post_remote_reply(provider: str, thread: RemoteThread, note: RemoteNote, bod
         post_github_reply(thread, note, body)
     else:
         die(f"unsupported provider: {provider}")
+
+
+def toggle_remote_thread_resolved(provider: str, thread: RemoteThread) -> str:
+    """Toggle resolved state for a remote thread when the provider supports it."""
+    if provider != "gitlab":
+        return "Resolve toggle is only supported for GitLab threads."
+    target_state = not thread.resolved
+    output = StringIO()
+    with redirect_stdout(output), redirect_stderr(output):
+        try:
+            set_gitlab_thread_resolved(thread, target_state)
+        except SystemExit:
+            detail = output.getvalue().strip().splitlines()
+            return detail[-1] if detail else "Resolve toggle failed."
+        except Exception as error:
+            return f"Resolve toggle failed: {error}"
+    state = "resolved" if target_state else "unresolved"
+    return f"Marked thread {state}."
 
 
 def publish_github_comment(
@@ -1447,6 +1970,49 @@ def append_wrapped_popup_text(
         lines.append((f"{prefix}{wrapped}", mode))
 
 
+def scroll_for_selected_block(scroll: int, content_height: int, block_start: int, block_end: int) -> int:
+    """Return popup scroll adjusted to show the selected block when it fits."""
+    block_height = block_end - block_start + 1
+    if block_height <= content_height:
+        if block_start < scroll:
+            return block_start
+        if block_end >= scroll + content_height:
+            return block_end - content_height + 1
+        return scroll
+    if block_start < scroll or block_start >= scroll + content_height:
+        return block_start
+    return scroll
+
+
+def clipboard_commands() -> list[list[str]]:
+    """Return available clipboard commands in preferred order."""
+    candidates = (
+        ["pbcopy"],
+        ["wl-copy"],
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+    )
+    return [command for command in candidates if shutil.which(command[0]) is not None]
+
+
+def copy_to_clipboard(text: str) -> tuple[bool, str]:
+    """Copy text to the system clipboard."""
+    last_error = ""
+    for command in clipboard_commands():
+        success, output = try_run(command, input_text=text)
+        if success:
+            return True, "Copied selected comment."
+        if output:
+            last_error = output
+    detail = f": {last_error}" if last_error else ""
+    return False, f"No clipboard command worked{detail}."
+
+
+def is_escape_key(key: int) -> bool:
+    """Return whether a curses key should cancel the current mode."""
+    return key in {27, curses.KEY_EXIT}
+
+
 def prompt(window: curses.window, label: str) -> str | None:
     """Read a short prompt from the bottom status line."""
     curses.noecho()
@@ -1463,7 +2029,8 @@ def prompt(window: curses.window, label: str) -> str | None:
             window.move(height - 1, min(width - 1, len(text)))
             window.refresh()
             key = window.getch()
-            if key == 27:
+            if is_escape_key(key):
+                curses.flushinp()
                 return None
             if key in {curses.KEY_ENTER, 10, 13}:
                 return value.strip()
@@ -1554,6 +2121,10 @@ class ReviewApp:
     def run(self) -> None:
         """Run the curses event loop."""
         init_theme(os.environ.get("review_THEME", "dracula").lower())
+        try:
+            curses.set_escdelay(25)
+        except curses.error:
+            pass
         curses.curs_set(0)
         self.screen.keypad(True)
         self.reload()
@@ -1807,19 +2378,37 @@ class ReviewApp:
         success, message = self.try_load_remote_comments(provider)
         self.message = message if success else f"Remote refresh failed: {message}"
 
+    def target_reply_drafts(self, target: ReplyTarget) -> list[ReplyDraft]:
+        """Return reply drafts for a selected remote note."""
+        return [
+            draft
+            for draft in reply_drafts(self.state)
+            if reply_draft_matches_target(draft, target)
+        ]
+
+    def reply_target_for_draft(self, draft: ReplyDraft) -> ReplyTarget | None:
+        """Return the current remote reply target for a saved draft."""
+        for thread in self.remote_threads_by_path.get(draft.path, []):
+            if thread.thread_id != draft.thread_id:
+                continue
+            for note in thread.notes:
+                if note.note_id == draft.note_id:
+                    return ReplyTarget(thread=thread, note=note)
+        return None
+
     def comment_popup_lines(
         self,
         width: int,
         selected_target: int,
-    ) -> tuple[list[tuple[str, int]], list[int], list[ReplyTarget]]:
-        """Return comment popup lines, selected note positions, and reply targets."""
+    ) -> tuple[list[tuple[str, int]], list[tuple[int, int]], list[CommentPopupSelection]]:
+        """Return comment popup lines, selected row ranges, and selections."""
         current = self.selected_file()
         if current is None:
             return [("No file selected.", color_pair(theme_color("comment")))], [], []
 
         lines: list[tuple[str, int]] = []
-        target_positions: list[int] = []
-        targets: list[ReplyTarget] = []
+        target_ranges: list[tuple[int, int]] = []
+        targets: list[CommentPopupSelection] = []
         target_index = 0
         local_comments = self.comments_by_path.get(current.path, [])
         remote_threads = self.remote_threads_by_path.get(current.path, [])
@@ -1830,7 +2419,7 @@ class ReviewApp:
             lines.append(("", 0))
         for index, thread in enumerate(remote_threads, 1):
             replies = max(0, len(thread.notes) - 1)
-            state = "resolved" if thread.resolved else "open"
+            state = "pending" if thread.pending else "resolved" if thread.resolved else "open"
             header = f"thread {index}  line {thread.line}  {state}  {replies} repl{'y' if replies == 1 else 'ies'}"
             lines.append((header, curses.A_BOLD | color_pair(theme_color("purple"))))
             for note_index, note in enumerate(thread.notes):
@@ -1843,13 +2432,246 @@ class ReviewApp:
                 mode = curses.A_BOLD | color_pair(color)
                 if target_index == selected_target:
                     mode |= curses.A_REVERSE
-                target_positions.append(len(lines))
-                targets.append(ReplyTarget(thread=thread, note=note))
+                block_start = len(lines)
+                target = ReplyTarget(thread=thread, note=note)
+                targets.append(CommentPopupSelection(target=target))
                 lines.append((f"{prefix} @{note.author}{suffix}", mode))
                 append_wrapped_popup_text(lines, note.body, width, 6 if is_reply else 4, color_pair(theme_color("foreground")))
+                target_ranges.append((block_start, len(lines) - 1))
+                active_suggestions = [] if thread.resolved else note_suggestions(note)
+                for suggestion_index, suggestion in enumerate(active_suggestions, 1):
+                    target_index += 1
+                    marker = ">" if target_index == selected_target else " "
+                    location = (
+                        f"line {suggestion.start_line}"
+                        if suggestion.start_line == suggestion.end_line
+                        else f"lines {suggestion.start_line}-{suggestion.end_line}"
+                    )
+                    mode = curses.A_BOLD | color_pair(theme_color("orange"))
+                    if target_index == selected_target:
+                        mode |= curses.A_REVERSE
+                    block_start = len(lines)
+                    targets.append(CommentPopupSelection(target=target, suggestion=suggestion))
+                    lines.append((f"{marker}    suggestion {suggestion_index}  {location}", mode))
+                    append_wrapped_popup_text(lines, suggestion.body, width, 8, color_pair(theme_color("foreground")))
+                    target_ranges.append((block_start, len(lines) - 1))
+                for draft_index, draft in enumerate(self.target_reply_drafts(target), 1):
+                    target_index += 1
+                    marker = ">" if target_index == selected_target else " "
+                    mode = curses.A_BOLD | color_pair(theme_color("yellow"))
+                    if target_index == selected_target:
+                        mode |= curses.A_REVERSE
+                    block_start = len(lines)
+                    targets.append(CommentPopupSelection(target=target, draft=draft))
+                    lines.append(
+                        (
+                            f"{marker}    draft {draft_index}",
+                            mode,
+                        )
+                    )
+                    append_wrapped_popup_text(lines, draft.body, width, 8, color_pair(theme_color("foreground")))
+                    target_ranges.append((block_start, len(lines) - 1))
                 target_index += 1
             lines.append(("", 0))
-        return lines or [("No comments for this file.", color_pair(theme_color("comment")))], target_positions, targets
+        return lines or [("No comments for this file.", color_pair(theme_color("comment")))], target_ranges, targets
+
+    def add_reply_draft_to_target(self, target: ReplyTarget) -> str:
+        """Prompt for and save a reply draft for the selected remote note."""
+        if not target.thread.replyable:
+            return "This comment is not replyable from the review API."
+        body = prompt(self.screen, "draft> ")
+        if body is None:
+            return "Draft cancelled."
+        if not body:
+            return "Draft cancelled: empty body."
+        add_reply_draft(self.base, target, body)
+        self.state = load_state(self.base)
+        return "Draft saved."
+
+    def edit_reply_draft(self, draft: ReplyDraft) -> str:
+        """Open the selected reply draft in the configured editor."""
+        success, body = self.suspend(lambda: edit_text(draft.body))
+        if not success:
+            return "Draft edit cancelled: editor exited with an error."
+        if not body:
+            return "Draft edit cancelled: empty body."
+        if body == draft.body:
+            return "Draft unchanged."
+        update_reply_draft_body(self.base, draft, body)
+        self.state = load_state(self.base)
+        return "Draft updated."
+
+    def remove_latest_reply_draft_for_target(self, target: ReplyTarget) -> str:
+        """Remove the newest draft for the selected remote note."""
+        drafts = self.target_reply_drafts(target)
+        if not drafts:
+            return "No draft for selected comment."
+        removed = remove_reply_drafts(self.base, {drafts[-1].draft_id})
+        self.state = load_state(self.base)
+        return f"Removed {removed} draft{'s' if removed != 1 else ''}."
+
+    def remove_reply_draft_for_selection(self, selection: CommentPopupSelection) -> str:
+        """Remove the selected draft or the newest draft for a selected note."""
+        if selection.suggestion is not None:
+            return "Selected row is not a draft."
+        if selection.draft is None:
+            return self.remove_latest_reply_draft_for_target(selection.target)
+        removed = remove_reply_drafts(self.base, {selection.draft.draft_id})
+        self.state = load_state(self.base)
+        return f"Removed {removed} draft{'s' if removed != 1 else ''}."
+
+    def publish_reply_drafts(self, drafts: Sequence[ReplyDraft]) -> str:
+        """Publish saved reply drafts."""
+        if not drafts:
+            return "No reply drafts selected."
+        answer = prompt(self.screen, f"publish {len(drafts)} draft{'s' if len(drafts) != 1 else ''}? y/N ")
+        if answer is None or answer.lower() != "y":
+            return "Publish drafts cancelled."
+
+        provider = detect_provider()
+        if provider is None:
+            return "Publish drafts failed: could not detect GitLab/GitHub remote."
+
+        published_ids: set[str] = set()
+        failures: list[str] = []
+        for draft in drafts:
+            target = self.reply_target_for_draft(draft)
+            if target is None:
+                failures.append(f"missing thread for {draft.path}:{draft.line}")
+                continue
+            output = StringIO()
+            with redirect_stdout(output), redirect_stderr(output):
+                try:
+                    post_remote_reply(provider, target.thread, target.note, draft.body)
+                except SystemExit:
+                    detail = output.getvalue().strip().splitlines()
+                    failures.append(detail[-1] if detail else f"failed {draft.path}:{draft.line}")
+                    continue
+                except Exception as error:
+                    failures.append(str(error))
+                    continue
+            published_ids.add(draft.draft_id)
+
+        if published_ids:
+            remove_reply_drafts(self.base, published_ids)
+            self.state = load_state(self.base)
+            self.try_load_remote_comments(provider)
+
+        summary = f"Published {len(published_ids)} draft{'s' if len(published_ids) != 1 else ''}."
+        if failures:
+            summary = f"{summary} {len(failures)} failed: {failures[0]}"
+        return summary
+
+    def publish_reply_drafts_for_current_file(self) -> str:
+        """Publish saved reply drafts for the selected file."""
+        current = self.selected_file()
+        if current is None:
+            return "No file selected."
+        drafts = [draft for draft in reply_drafts(self.state) if draft.path == current.path]
+        if not drafts:
+            return "No reply drafts for this file."
+        return self.publish_reply_drafts(drafts)
+
+    def publish_reply_drafts_for_selection(self, selection: CommentPopupSelection) -> str:
+        """Publish the selected draft or all drafts for the current file."""
+        if selection.suggestion is not None:
+            return "Selected row is not a draft."
+        if selection.draft is None:
+            return self.publish_reply_drafts_for_current_file()
+        return self.publish_reply_drafts([selection.draft])
+
+    def toggle_selected_thread_resolved(self, target: ReplyTarget) -> str:
+        """Toggle resolved state for the selected remote thread."""
+        if target.thread.pending:
+            return "Pending review comments cannot be resolved before publishing."
+        provider = detect_provider()
+        if provider is None:
+            return "Resolve toggle failed: could not detect GitLab/GitHub remote."
+        message = toggle_remote_thread_resolved(provider, target.thread)
+        if message.startswith("Marked thread"):
+            self.try_load_remote_comments(provider)
+        return message
+
+    def copy_selected_popup_row(self, selection: CommentPopupSelection) -> str:
+        """Copy the selected comment, suggestion, or draft body to the clipboard."""
+        if selection.suggestion is not None:
+            body = selection.suggestion.body
+        else:
+            body = selection.draft.body if selection.draft is not None else selection.target.note.body
+        success, message = copy_to_clipboard(body)
+        return message if success else f"Copy failed: {message}"
+
+    def apply_selected_suggestion(self, selection: CommentPopupSelection) -> str:
+        """Apply the selected suggestion to the working tree."""
+        if selection.suggestion is None:
+            return "No suggestion selected."
+        suggestion = selection.suggestion
+        location = (
+            f"{suggestion.path}:{suggestion.start_line}"
+            if suggestion.start_line == suggestion.end_line
+            else f"{suggestion.path}:{suggestion.start_line}-{suggestion.end_line}"
+        )
+        answer = prompt(self.screen, f"apply suggestion to {location}? y/N ")
+        if answer is None or answer.lower() != "y":
+            return "Apply suggestion cancelled."
+        undo, undo_error = build_suggestion_undo(suggestion)
+        if undo is None:
+            return f"Apply suggestion failed: {undo_error}"
+        success, message = apply_suggestion_to_file(suggestion)
+        if success:
+            save_suggestion_undo(self.base, undo)
+            self.state = load_state(self.base)
+            self.diff_cache.clear()
+        return message if success else f"Apply suggestion failed: {message}"
+
+    def undo_last_suggestion(self) -> str:
+        """Undo the last applied suggestion."""
+        success, message = restore_suggestion_undo(self.base)
+        if success:
+            self.state = load_state(self.base)
+            self.diff_cache.clear()
+        return message if success else f"Undo failed: {message}"
+
+    def jump_diff_to_line(self, path: str, line_number: int) -> bool:
+        """Scroll the diff view to a rendered line number if it can be found."""
+        _, width = self.screen.getmaxyx()
+        cache_key = (path, width)
+        if cache_key not in self.diff_cache:
+            self.diff_cache[cache_key] = side_by_side_diff_lines(self.base, path, width, self.branch)
+        line_pattern = re.compile(rf"(?<!\d){line_number}(?!\d)")
+        for index, line in enumerate(self.diff_cache[cache_key]):
+            if line_pattern.search(ANSI_RE.sub("", line)):
+                self.diff_scroll = max(0, index - 2)
+                return True
+        return False
+
+    def jump_to_remote_target(self, target: ReplyTarget) -> str:
+        """Close the popup and jump the main diff to the selected remote line."""
+        current = self.selected_file()
+        if current is None:
+            return "No file selected."
+        if current.path != target.note.path:
+            return f"Selected comment belongs to {target.note.path}."
+        if self.jump_diff_to_line(target.note.path, target.note.line):
+            self.message = f"Jumped to {target.note.path}:{target.note.line}."
+        else:
+            self.message = f"Could not find line {target.note.line} in rendered diff."
+        return self.message
+
+    def jump_to_popup_selection(self, selection: CommentPopupSelection) -> str:
+        """Close the popup and jump the main diff to the selected row line."""
+        if selection.suggestion is None:
+            return self.jump_to_remote_target(selection.target)
+        current = self.selected_file()
+        if current is None:
+            return "No file selected."
+        if current.path != selection.suggestion.path:
+            return f"Selected suggestion belongs to {selection.suggestion.path}."
+        if self.jump_diff_to_line(selection.suggestion.path, selection.suggestion.start_line):
+            self.message = f"Jumped to {selection.suggestion.path}:{selection.suggestion.start_line}."
+        else:
+            self.message = f"Could not find line {selection.suggestion.start_line} in rendered diff."
+        return self.message
 
     def reply_to_remote_target(self, target: ReplyTarget) -> str:
         """Prompt for and post a reply to the selected remote note."""
@@ -1895,17 +2717,14 @@ class ReviewApp:
         status = ""
 
         while True:
-            lines, target_positions, targets = self.comment_popup_lines(content_width, selected_target)
+            lines, target_ranges, targets = self.comment_popup_lines(content_width, selected_target)
             if targets:
                 if selected_target >= len(targets):
                     selected_target = len(targets) - 1
-                    lines, target_positions, targets = self.comment_popup_lines(content_width, selected_target)
+                    lines, target_ranges, targets = self.comment_popup_lines(content_width, selected_target)
                 selected_target = max(0, selected_target)
-                selected_line = target_positions[selected_target]
-                if selected_line < scroll:
-                    scroll = selected_line
-                elif selected_line >= scroll + content_height:
-                    scroll = selected_line - content_height + 1
+                block_start, block_end = target_ranges[selected_target]
+                scroll = scroll_for_selected_block(scroll, content_height, block_start, block_end)
             max_scroll = max(0, len(lines) - content_height)
             scroll = max(0, min(scroll, max_scroll))
             popup = curses.newwin(popup_height, popup_width, top, left)
@@ -1913,7 +2732,10 @@ class ReviewApp:
             popup.erase()
             popup.box()
             add_text(popup, 0, 2, " comments ", popup_width - 4, curses.A_BOLD | color_pair(theme_color("purple")))
-            footer = status or "Up/Down or j/k select  J/K page  r reply  q/Esc close"
+            footer = (
+                status
+                or "Up/Down/j/k select  J/K page  a add/edit  A apply  u undo  x del  P pub  r reply  s res  y copy  g goto  q/Esc"
+            )
             add_text(
                 popup,
                 popup_height - 2,
@@ -1953,8 +2775,52 @@ class ReviewApp:
             elif key in {ord("K"), curses.KEY_PPAGE}:
                 scroll -= content_height
                 status = ""
+            elif key == ord("a"):
+                if targets:
+                    selection = targets[selected_target]
+                    status = (
+                        self.edit_reply_draft(selection.draft)
+                        if selection.draft is not None
+                        else self.add_reply_draft_to_target(selection.target)
+                    )
+                else:
+                    status = "No remote comment selected."
+            elif key == ord("x"):
+                status = (
+                    self.remove_reply_draft_for_selection(targets[selected_target])
+                    if targets
+                    else "No remote comment selected."
+                )
+            elif key == ord("P"):
+                status = (
+                    self.publish_reply_drafts_for_selection(targets[selected_target])
+                    if targets
+                    else self.publish_reply_drafts_for_current_file()
+                )
+            elif key == ord("A"):
+                status = self.apply_selected_suggestion(targets[selected_target]) if targets else "No suggestion selected."
+            elif key == ord("u"):
+                status = self.undo_last_suggestion()
             elif key == ord("r"):
-                status = self.reply_to_remote_target(targets[selected_target]) if targets else "No remote comment selected."
+                status = (
+                    self.reply_to_remote_target(targets[selected_target].target)
+                    if targets
+                    else "No remote comment selected."
+                )
+            elif key == ord("s"):
+                status = (
+                    self.toggle_selected_thread_resolved(targets[selected_target].target)
+                    if targets
+                    else "No remote comment selected."
+                )
+            elif key == ord("y"):
+                status = self.copy_selected_popup_row(targets[selected_target]) if targets else "No remote comment selected."
+            elif key == ord("g"):
+                if targets:
+                    self.jump_to_popup_selection(targets[selected_target])
+                    self.draw()
+                    return
+                status = "No remote comment selected."
 
     def show_text_popup(self, title: str, messages: Sequence[str]) -> None:
         """Show plain text messages in a scrollable popup."""
@@ -2145,7 +3011,17 @@ class ReviewApp:
 
         local_count = len(local_comments)
         reply_count = sum(max(0, len(thread.notes) - 1) for thread in remote_threads)
-        summary = f"{local_count} local / {len(remote_threads)} threads / {reply_count} replies"
+        suggestion_count = sum(
+            len(note_suggestions(note))
+            for thread in remote_threads
+            if not thread.resolved
+            for note in thread.notes
+        )
+        draft_count = len([draft for draft in reply_drafts(self.state) if draft.path == current.path])
+        summary = (
+            f"{local_count} local / {len(remote_threads)} threads / {reply_count} replies / "
+            f"{suggestion_count} suggestions / {draft_count} drafts"
+        )
         add_text(self.screen, y + 1, x, summary.ljust(width), width, color_pair(theme_color("foreground")))
         if height > 2 and local_comments:
             local_lines = ", ".join(str(comment.target_line) for comment in local_comments)
