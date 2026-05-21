@@ -1,5 +1,33 @@
 #!/usr/bin/env python3
-"""CLI review helper with file checklist state and publishable inline comments."""
+"""Terminal review helper for branch changes.
+
+review2 compares the current branch against a base ref, shows changed files in a
+full-screen curses UI, and stores per-file reviewed checkboxes under
+.git/review2/<base>...<branch>/state.json. The default UI keeps a side-by-side
+diff at the top, a compact comment summary below it, and the changed-file list at
+the bottom.
+
+Local review comments are written directly into changed files with markers such
+as "#review this is hard to read". Publishing scans those markers, creates
+GitLab/GitHub MR or PR comments, remembers already published marker IDs, and
+removes successfully published standalone marker lines from the working tree.
+Inline markers are left untouched.
+
+Remote discussions are auto-loaded when the UI starts and can be refreshed with
+R. The comments popup groups remote notes into threads, highlights replies, and
+allows replying to a selected remote comment from inside the tool.
+
+Useful keys in the UI:
+- / starts regex file search.
+- Space toggles the reviewed checkbox for the selected file.
+- f cycles all/unchecked/checked filters.
+- n/N jumps to the next or previous unreviewed file.
+- c/e opens the selected file in the configured editor.
+- d opens the selected diff in the pager.
+- m opens the threaded comments popup; Up/Down or j/k select comments, r replies.
+- o opens the current GitLab MR or GitHub PR in the browser.
+- p publishes local #review markers, with output shown in a popup.
+"""
 
 from __future__ import annotations
 
@@ -63,14 +91,36 @@ class ReviewComment:
 
 
 @dataclass(frozen=True)
-class RemoteComment:
-    """A published review conversation note."""
+class RemoteNote:
+    """One published note in a review conversation."""
 
     path: str
     line: int
     author: str
     body: str
+    note_id: str = ""
     created_at: str = ""
+    is_reply: bool = False
+
+
+@dataclass(frozen=True)
+class RemoteThread:
+    """A published review conversation with replies."""
+
+    thread_id: str
+    path: str
+    line: int
+    notes: tuple[RemoteNote, ...]
+    resolved: bool = False
+    replyable: bool = True
+
+
+@dataclass(frozen=True)
+class ReplyTarget:
+    """A selected remote note that can receive a reply."""
+
+    thread: RemoteThread
+    note: RemoteNote
 
 
 @dataclass(frozen=True)
@@ -573,9 +623,11 @@ def detect_provider() -> str | None:
 def open_review_request(provider: str) -> bool:
     """Open the current merge or pull request in the browser."""
     if provider == "gitlab":
-        return call(["glab", "mr", "view", "--web"]) == 0
+        success, _ = try_run(["glab", "mr", "view", "--web"])
+        return success
     if provider == "github":
-        return call(["gh", "pr", "view", "--web"]) == 0
+        success, _ = try_run(["gh", "pr", "view", "--web"])
+        return success
     die(f"unsupported provider: {provider}")
 
 
@@ -610,69 +662,117 @@ def author_name(value: dict[str, Any]) -> str:
     return str(value.get("username") or value.get("login") or value.get("name") or "unknown")
 
 
-def remote_comments_by_path(comments: Sequence[RemoteComment]) -> dict[str, list[RemoteComment]]:
-    """Return remote comments grouped by file path."""
-    grouped: dict[str, list[RemoteComment]] = {}
-    for comment in comments:
-        grouped.setdefault(comment.path, []).append(comment)
+def remote_threads_by_path(threads: Sequence[RemoteThread]) -> dict[str, list[RemoteThread]]:
+    """Return remote review threads grouped by file path."""
+    grouped: dict[str, list[RemoteThread]] = {}
+    for thread in threads:
+        grouped.setdefault(thread.path, []).append(thread)
     return grouped
 
 
-def fallback_remote_comment(
+def fallback_remote_note(
     body: str,
     author: str,
     created_at: str = "",
-) -> RemoteComment | None:
-    """Parse a fallback provider comment body into a remote comment."""
+    *,
+    is_reply: bool = False,
+) -> RemoteNote | None:
+    """Parse a fallback provider comment body into a remote note."""
     match = FALLBACK_BODY_RE.match(body)
     if match is None:
         return None
-    return RemoteComment(
+    return RemoteNote(
         path=match.group("path"),
         line=int(match.group("line")),
         author=author,
         body=match.group("body").strip(),
+        note_id="",
         created_at=created_at,
+        is_reply=is_reply,
     )
 
 
-def fetch_gitlab_comments() -> list[RemoteComment]:
-    """Fetch GitLab MR discussion notes."""
+def thread_from_note(
+    thread_id: str,
+    note: RemoteNote,
+    *,
+    resolved: bool = False,
+    replyable: bool = True,
+) -> RemoteThread:
+    """Create a single-note remote thread."""
+    return RemoteThread(
+        thread_id=thread_id,
+        path=note.path,
+        line=note.line,
+        notes=(note,),
+        resolved=resolved,
+        replyable=replyable,
+    )
+
+
+def provider_note_path_line(note: dict[str, Any], default_path: str, default_line: int) -> tuple[str, int]:
+    """Return provider note path and line, falling back to the current thread position."""
+    position = note.get("position") or {}
+    path = position.get("new_path") or position.get("old_path") or default_path
+    line = position.get("new_line") or position.get("old_line") or default_line
+    return str(path or ""), int(line or 0)
+
+
+def gitlab_remote_note(note: dict[str, Any], path: str, line: int, *, is_reply: bool) -> RemoteNote:
+    """Return a remote note parsed from one GitLab discussion note."""
+    return RemoteNote(
+        path=path,
+        line=line,
+        author=author_name(note.get("author") or {}),
+        body=str(note.get("body") or ""),
+        note_id=str(note.get("id") or ""),
+        created_at=str(note.get("created_at") or ""),
+        is_reply=is_reply,
+    )
+
+
+def fetch_gitlab_threads() -> list[RemoteThread]:
+    """Fetch GitLab MR discussion threads."""
     project = gitlab_project_path()
     iid = gitlab_mr_iid()
     discussions = json.loads(run(["glab", "api", f"projects/{project}/merge_requests/{iid}/discussions"]))
-    comments: list[RemoteComment] = []
+    threads: list[RemoteThread] = []
     for discussion in discussions:
         discussion_path = ""
         discussion_line = 0
+        notes: list[RemoteNote] = []
         for note in discussion.get("notes", []):
             body = str(note.get("body") or "")
             author = author_name(note.get("author") or {})
             created_at = str(note.get("created_at") or "")
-            position = note.get("position") or {}
-            path = position.get("new_path") or position.get("old_path") or discussion_path
-            line = position.get("new_line") or position.get("old_line") or discussion_line
+            path, line = provider_note_path_line(note, discussion_path, discussion_line)
             if path:
-                discussion_path = str(path)
+                discussion_path = path
             if line:
-                discussion_line = int(line)
+                discussion_line = line
             if note.get("system"):
                 continue
             if not path or not line:
-                fallback = fallback_remote_comment(body, author, created_at)
+                fallback = fallback_remote_note(body, author, created_at, is_reply=bool(notes))
                 if fallback is not None:
-                    comments.append(fallback)
+                    notes.append(fallback)
+                    discussion_path = fallback.path
+                    discussion_line = fallback.line
                 continue
-            comments.append(
-                RemoteComment(
-                    path=str(path),
-                    line=int(line),
-                    author=author,
-                    body=body,
-                    created_at=created_at,
+            notes.append(gitlab_remote_note(note, path, line, is_reply=bool(notes)))
+        if notes:
+            thread_id = str(discussion.get("id") or len(threads) + 1)
+            resolved = bool(discussion.get("resolved") or any(note.get("resolved") for note in discussion.get("notes", [])))
+            threads.append(
+                RemoteThread(
+                    thread_id=thread_id,
+                    path=notes[0].path,
+                    line=notes[0].line,
+                    notes=tuple(notes),
+                    resolved=resolved,
                 )
             )
-    return comments
+    return threads
 
 
 def fallback_body(comment: ReviewComment) -> str:
@@ -736,46 +836,161 @@ def github_pr() -> dict[str, Any]:
     return json.loads(run(["gh", "pr", "view", "--json", "number,headRefOid"]))
 
 
-def fetch_github_comments() -> list[RemoteComment]:
-    """Fetch GitHub PR review comments."""
+def github_remote_note(comment: dict[str, Any]) -> RemoteNote | None:
+    """Return a remote note parsed from one GitHub PR review comment."""
+    path = comment.get("path")
+    line = comment.get("line") or comment.get("original_line")
+    if not path or not line:
+        return None
+    return RemoteNote(
+        path=str(path),
+        line=int(line),
+        author=author_name(comment.get("user") or {}),
+        body=str(comment.get("body") or ""),
+        note_id=str(comment.get("id") or ""),
+        created_at=str(comment.get("created_at") or ""),
+    )
+
+
+def remote_note_with_reply(note: RemoteNote, *, is_reply: bool) -> RemoteNote:
+    """Return a note with the reply flag adjusted."""
+    return RemoteNote(
+        path=note.path,
+        line=note.line,
+        author=note.author,
+        body=note.body,
+        note_id=note.note_id,
+        created_at=note.created_at,
+        is_reply=is_reply,
+    )
+
+
+def github_thread_notes(
+    root_id: str,
+    notes_by_id: dict[str, RemoteNote],
+    children_by_parent: dict[str, list[str]],
+) -> tuple[RemoteNote, ...]:
+    """Return one GitHub review thread with replies flattened in display order."""
+    notes = [remote_note_with_reply(notes_by_id[root_id], is_reply=False)]
+    for child_id in children_by_parent.get(root_id, []):
+        notes.append(remote_note_with_reply(notes_by_id[child_id], is_reply=True))
+        for nested_id in children_by_parent.get(child_id, []):
+            notes.append(remote_note_with_reply(notes_by_id[nested_id], is_reply=True))
+    return tuple(notes)
+
+
+def fetch_github_threads() -> list[RemoteThread]:
+    """Fetch GitHub PR review threads."""
     repo = github_repo()
     pr = github_pr()
     number = str(pr["number"])
     raw_comments = json.loads(run(["gh", "api", f"repos/{repo}/pulls/{number}/comments"]))
-    comments: list[RemoteComment] = []
-    for comment in raw_comments:
-        path = comment.get("path")
-        line = comment.get("line") or comment.get("original_line")
-        if not path or not line:
+    threads: list[RemoteThread] = []
+    notes_by_id: dict[str, RemoteNote] = {}
+    parent_by_id: dict[str, str] = {}
+    ordered_ids: list[str] = []
+    for index, comment in enumerate(raw_comments, 1):
+        note = github_remote_note(comment)
+        if note is None:
             continue
-        comments.append(
-            RemoteComment(
-                path=str(path),
-                line=int(line),
-                author=author_name(comment.get("user") or {}),
-                body=str(comment.get("body") or ""),
-                created_at=str(comment.get("created_at") or ""),
+        note_id = str(comment.get("id") or index)
+        parent_id = str(comment.get("in_reply_to_id") or "")
+        notes_by_id[note_id] = note
+        parent_by_id[note_id] = parent_id
+        ordered_ids.append(note_id)
+
+    children_by_parent: dict[str, list[str]] = {}
+    for note_id, parent_id in parent_by_id.items():
+        if parent_id in notes_by_id:
+            children_by_parent.setdefault(parent_id, []).append(note_id)
+
+    for note_id in ordered_ids:
+        if parent_by_id[note_id] in notes_by_id:
+            continue
+        notes = github_thread_notes(note_id, notes_by_id, children_by_parent)
+        threads.append(
+            RemoteThread(
+                thread_id=note_id,
+                path=notes[0].path,
+                line=notes[0].line,
+                notes=notes,
             )
         )
+
     issue_comments = json.loads(run(["gh", "api", f"repos/{repo}/issues/{number}/comments"]))
-    for comment in issue_comments:
-        fallback = fallback_remote_comment(
+    for index, comment in enumerate(issue_comments, 1):
+        fallback = fallback_remote_note(
             str(comment.get("body") or ""),
             author_name(comment.get("user") or {}),
             str(comment.get("created_at") or ""),
         )
         if fallback is not None:
-            comments.append(fallback)
-    return comments
+            threads.append(thread_from_note(f"issue-{comment.get('id') or index}", fallback, replyable=False))
+    return threads
 
 
-def fetch_remote_comments(provider: str) -> list[RemoteComment]:
-    """Fetch published review comments for a provider."""
+def fetch_remote_threads(provider: str) -> list[RemoteThread]:
+    """Fetch published review threads for a provider."""
     if provider == "gitlab":
-        return fetch_gitlab_comments()
+        return fetch_gitlab_threads()
     if provider == "github":
-        return fetch_github_comments()
+        return fetch_github_threads()
     die(f"unsupported provider: {provider}")
+
+
+def post_gitlab_reply(thread: RemoteThread, body: str) -> None:
+    """Post a reply to an existing GitLab MR thread."""
+    project = gitlab_project_path()
+    iid = gitlab_mr_iid()
+    command = [
+        "glab",
+        "api",
+        f"projects/{project}/merge_requests/{iid}/discussions/{thread.thread_id}/notes",
+        "--method",
+        "POST",
+        "--header",
+        "Content-Type: application/json",
+        "--input",
+        "-",
+    ]
+    success, output = try_run(command, input_text=json.dumps({"body": body}))
+    if not success:
+        die(f"could not reply to GitLab thread {thread.thread_id}\n{output}")
+    print(f"posted gitlab reply to thread {thread.thread_id}")
+
+
+def post_github_reply(thread: RemoteThread, note: RemoteNote, body: str) -> None:
+    """Post a reply to an existing GitHub PR review comment."""
+    if not thread.replyable or not note.note_id:
+        die("this GitHub comment is not replyable from the pull request review API")
+    repo = github_repo()
+    pr = github_pr()
+    number = str(pr["number"])
+    command = [
+        "gh",
+        "api",
+        f"repos/{repo}/pulls/{number}/comments/{note.note_id}/replies",
+        "--method",
+        "POST",
+        "--header",
+        "Content-Type: application/json",
+        "--input",
+        "-",
+    ]
+    success, output = try_run(command, input_text=json.dumps({"body": body}))
+    if not success:
+        die(f"could not reply to GitHub comment {note.note_id}\n{output}")
+    print(f"posted github reply to comment {note.note_id}")
+
+
+def post_remote_reply(provider: str, thread: RemoteThread, note: RemoteNote, body: str) -> None:
+    """Post a reply to a remote review thread or comment."""
+    if provider == "gitlab":
+        post_gitlab_reply(thread, body)
+    elif provider == "github":
+        post_github_reply(thread, note, body)
+    else:
+        die(f"unsupported provider: {provider}")
 
 
 def publish_github_comment(
@@ -1138,6 +1353,25 @@ def plain_popup_lines(messages: Sequence[str], width: int) -> list[tuple[str, in
     return lines or [("", mode)]
 
 
+def short_timestamp(value: str) -> str:
+    """Return a compact timestamp for comment metadata."""
+    return value.replace("T", " ")[:16] if value else ""
+
+
+def append_wrapped_popup_text(
+    lines: list[tuple[str, int]],
+    text: str,
+    width: int,
+    indent: int,
+    mode: int,
+) -> None:
+    """Append wrapped popup text with a fixed left indent."""
+    prefix = " " * max(0, min(indent, width - 1))
+    wrap_width = max(1, width - len(prefix))
+    for wrapped in wrap_text(text, wrap_width):
+        lines.append((f"{prefix}{wrapped}", mode))
+
+
 def prompt(window: curses.window, label: str) -> str | None:
     """Read a short prompt from the bottom status line."""
     curses.noecho()
@@ -1194,7 +1428,7 @@ class ReviewApp:
         self.state: dict[str, Any] = {}
         self.reviewed: set[str] = set()
         self.comments_by_path: dict[str, list[ReviewComment]] = {}
-        self.remote_comments_by_path: dict[str, list[RemoteComment]] = {}
+        self.remote_threads_by_path: dict[str, list[RemoteThread]] = {}
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
@@ -1452,12 +1686,14 @@ class ReviewApp:
         if provider is None:
             self.message = "Open cancelled: could not detect GitLab/GitHub remote."
             return
-        opened = self.suspend(lambda: open_review_request(provider))
+        self.message = f"Opening {provider} review..."
+        self.draw()
+        opened = open_review_request(provider)
         self.message = f"Opened {provider} review." if opened else f"Could not open {provider} review."
 
     def load_remote_comments(self, provider: str) -> None:
         """Load remote comments into the TUI cache."""
-        self.remote_comments_by_path = remote_comments_by_path(fetch_remote_comments(provider))
+        self.remote_threads_by_path = remote_threads_by_path(fetch_remote_threads(provider))
 
     def try_load_remote_comments(self, provider: str) -> tuple[bool, str]:
         """Load remote comments and return success plus a status message."""
@@ -1472,8 +1708,8 @@ class ReviewApp:
             except Exception as error:
                 return False, f"review2: {error}"
 
-        total = sum(len(comments) for comments in self.remote_comments_by_path.values())
-        return True, f"Loaded {total} remote comment{'s' if total != 1 else ''}."
+        total = sum(len(threads) for threads in self.remote_threads_by_path.values())
+        return True, f"Loaded {total} remote thread{'s' if total != 1 else ''}."
 
     def load_startup_remote_comments(self) -> None:
         """Load remote comments automatically when the TUI starts."""
@@ -1496,32 +1732,154 @@ class ReviewApp:
         success, message = self.try_load_remote_comments(provider)
         self.message = message if success else f"Remote refresh failed: {message}"
 
-    def selected_comment_lines(self, width: int) -> list[tuple[str, int]]:
-        """Return wrapped comments for the selected file."""
+    def comment_popup_lines(
+        self,
+        width: int,
+        selected_target: int,
+    ) -> tuple[list[tuple[str, int]], list[int], list[ReplyTarget]]:
+        """Return comment popup lines, selected note positions, and reply targets."""
         current = self.selected_file()
         if current is None:
-            return [("No file selected.", color_pair(theme_color("comment")))]
+            return [("No file selected.", color_pair(theme_color("comment")))], [], []
 
         lines: list[tuple[str, int]] = []
+        target_positions: list[int] = []
+        targets: list[ReplyTarget] = []
+        target_index = 0
         local_comments = self.comments_by_path.get(current.path, [])
-        remote_comments = self.remote_comments_by_path.get(current.path, [])
-        for comment in local_comments:
-            header = f"local line {comment.target_line}"
+        remote_threads = self.remote_threads_by_path.get(current.path, [])
+        for index, comment in enumerate(local_comments, 1):
+            header = f"local draft {index}  line {comment.target_line}"
             lines.append((header, curses.A_BOLD | color_pair(theme_color("yellow"))))
-            for wrapped in wrap_text(comment.body, width):
-                lines.append((wrapped, color_pair(theme_color("foreground"))))
+            append_wrapped_popup_text(lines, comment.body, width, 2, color_pair(theme_color("foreground")))
             lines.append(("", 0))
-        for comment in remote_comments:
-            header = f"remote line {comment.line} @{comment.author}"
-            lines.append((header, curses.A_BOLD | color_pair(theme_color("green"))))
-            for wrapped in wrap_text(comment.body, width):
-                lines.append((wrapped, color_pair(theme_color("foreground"))))
+        for index, thread in enumerate(remote_threads, 1):
+            replies = max(0, len(thread.notes) - 1)
+            state = "resolved" if thread.resolved else "open"
+            header = f"thread {index}  line {thread.line}  {state}  {replies} repl{'y' if replies == 1 else 'ies'}"
+            lines.append((header, curses.A_BOLD | color_pair(theme_color("purple"))))
+            for note_index, note in enumerate(thread.notes):
+                is_reply = note_index > 0 or note.is_reply
+                timestamp = short_timestamp(note.created_at)
+                suffix = f"  {timestamp}" if timestamp else ""
+                marker = ">" if target_index == selected_target else " "
+                prefix = f"{marker} |- reply" if is_reply else f"{marker} comment"
+                color = theme_color("green") if is_reply else theme_color("cyan")
+                mode = curses.A_BOLD | color_pair(color)
+                if target_index == selected_target:
+                    mode |= curses.A_REVERSE
+                target_positions.append(len(lines))
+                targets.append(ReplyTarget(thread=thread, note=note))
+                lines.append((f"{prefix} @{note.author}{suffix}", mode))
+                append_wrapped_popup_text(lines, note.body, width, 6 if is_reply else 4, color_pair(theme_color("foreground")))
+                target_index += 1
             lines.append(("", 0))
-        return lines or [("No comments for this file.", color_pair(theme_color("comment")))]
+        return lines or [("No comments for this file.", color_pair(theme_color("comment")))], target_positions, targets
+
+    def reply_to_remote_target(self, target: ReplyTarget) -> str:
+        """Prompt for and post a reply to the selected remote note."""
+        if not target.thread.replyable:
+            return "This comment is not replyable from the review API."
+        body = prompt(self.screen, "reply> ")
+        if body is None:
+            return "Reply cancelled."
+        if not body:
+            return "Reply cancelled: empty body."
+
+        provider = detect_provider()
+        if provider is None:
+            return "Reply failed: could not detect GitLab/GitHub remote."
+
+        output = StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            try:
+                post_remote_reply(provider, target.thread, target.note, body)
+            except SystemExit:
+                detail = output.getvalue().strip().splitlines()
+                return detail[-1] if detail else "Reply failed."
+            except Exception as error:
+                return f"Reply failed: {error}"
+
+        success, message = self.try_load_remote_comments(provider)
+        if not success:
+            return f"Reply posted, but refresh failed: {message}"
+        return f"Reply posted. {message}"
 
     def show_comments_popup(self) -> None:
         """Show scrollable comments for the selected file."""
-        self.show_scroll_popup("comments", self.selected_comment_lines)
+        self.draw()
+        height, width = self.screen.getmaxyx()
+        popup_height = max(8, min(height - 4, int(height * 0.75)))
+        popup_width = max(50, min(width - 4, int(width * 0.85)))
+        top = max(1, (height - popup_height) // 2)
+        left = max(1, (width - popup_width) // 2)
+        content_width = popup_width - 4
+        content_height = popup_height - 4
+        selected_target = 0
+        scroll = 0
+        status = ""
+
+        while True:
+            lines, target_positions, targets = self.comment_popup_lines(content_width, selected_target)
+            if targets:
+                if selected_target >= len(targets):
+                    selected_target = len(targets) - 1
+                    lines, target_positions, targets = self.comment_popup_lines(content_width, selected_target)
+                selected_target = max(0, selected_target)
+                selected_line = target_positions[selected_target]
+                if selected_line < scroll:
+                    scroll = selected_line
+                elif selected_line >= scroll + content_height:
+                    scroll = selected_line - content_height + 1
+            max_scroll = max(0, len(lines) - content_height)
+            scroll = max(0, min(scroll, max_scroll))
+            popup = curses.newwin(popup_height, popup_width, top, left)
+            popup.keypad(True)
+            popup.erase()
+            popup.box()
+            add_text(popup, 0, 2, " comments ", popup_width - 4, curses.A_BOLD | color_pair(theme_color("purple")))
+            footer = status or "Up/Down or j/k select  J/K page  r reply  q/Esc close"
+            add_text(
+                popup,
+                popup_height - 2,
+                2,
+                footer.ljust(popup_width - 4),
+                popup_width - 4,
+                color_pair(theme_color("comment")),
+            )
+            for row in range(content_height):
+                index = scroll + row
+                if index >= len(lines):
+                    break
+                text, mode = lines[index]
+                add_text(popup, row + 2, 2, text.ljust(content_width), content_width, mode)
+            popup.refresh()
+            key = popup.getch()
+            if key in {ord("q"), 27, curses.KEY_ENTER, 10, 13}:
+                self.draw()
+                return
+            if key in {ord("j"), curses.KEY_DOWN}:
+                selected_target = selected_target + 1 if targets else selected_target
+                if targets:
+                    selected_target %= len(targets)
+                else:
+                    scroll += 1
+                status = ""
+            elif key in {ord("k"), curses.KEY_UP}:
+                selected_target = selected_target - 1 if targets else selected_target
+                if targets:
+                    selected_target %= len(targets)
+                else:
+                    scroll -= 1
+                status = ""
+            elif key in {ord("J"), curses.KEY_NPAGE}:
+                scroll += content_height
+                status = ""
+            elif key in {ord("K"), curses.KEY_PPAGE}:
+                scroll -= content_height
+                status = ""
+            elif key == ord("r"):
+                status = self.reply_to_remote_target(targets[selected_target]) if targets else "No remote comment selected."
 
     def show_text_popup(self, title: str, messages: Sequence[str]) -> None:
         """Show plain text messages in a scrollable popup."""
@@ -1548,6 +1906,7 @@ class ReviewApp:
             max_scroll = max(0, len(lines) - content_height)
             scroll = max(0, min(scroll, max_scroll))
             popup = curses.newwin(popup_height, popup_width, top, left)
+            popup.keypad(True)
             popup.erase()
             popup.box()
             add_text(popup, 0, 2, f" {title} ", popup_width - 4, curses.A_BOLD | color_pair(theme_color("purple")))
@@ -1579,15 +1938,12 @@ class ReviewApp:
             elif key in {ord("K"), curses.KEY_PPAGE}:
                 scroll -= content_height
 
-    def suspend(self, action: Any, *, wait: bool = False) -> Any:
-        """Temporarily leave curses to run an external command."""
+    def suspend(self, action: Callable[[], Any]) -> Any:
+        """Temporarily hand the terminal to an interactive command."""
         curses.def_prog_mode()
         curses.endwin()
         try:
-            result = action()
-            if wait:
-                input("\npress enter to return to review2 ")
-            return result
+            return action()
         finally:
             curses.reset_prog_mode()
             curses.curs_set(0)
@@ -1707,20 +2063,20 @@ class ReviewApp:
         if current is None:
             return
         local_comments = self.comments_by_path.get(current.path, [])
-        remote_comments = self.remote_comments_by_path.get(current.path, [])
-        if not local_comments and not remote_comments:
+        remote_threads = self.remote_threads_by_path.get(current.path, [])
+        if not local_comments and not remote_threads:
             add_text(self.screen, y + 1, x, "No #review comments in this file.", width)
             return
 
         local_count = len(local_comments)
-        remote_count = len(remote_comments)
-        summary = f"{local_count} local / {remote_count} remote"
+        reply_count = sum(max(0, len(thread.notes) - 1) for thread in remote_threads)
+        summary = f"{local_count} local / {len(remote_threads)} threads / {reply_count} replies"
         add_text(self.screen, y + 1, x, summary.ljust(width), width, color_pair(theme_color("foreground")))
         if height > 2 and local_comments:
             local_lines = ", ".join(str(comment.target_line) for comment in local_comments)
             add_text(self.screen, y + 2, x, f"local lines: {local_lines}".ljust(width), width, color_pair(theme_color("yellow")))
-        if height > 3 and remote_comments:
-            remote_lines = ", ".join(str(comment.line) for comment in remote_comments)
+        if height > 3 and remote_threads:
+            remote_lines = ", ".join(str(thread.line) for thread in remote_threads)
             add_text(self.screen, y + 3, x, f"remote lines: {remote_lines}".ljust(width), width, color_pair(theme_color("green")))
 
 
