@@ -130,6 +130,34 @@ class ReviewRangeTest(unittest.TestCase):
         self.assertFalse(review["rendered_new_line_matches"]("│ 99 │ old code │ 98 │ value = 99", 99))
         self.assertTrue(review["rendered_new_line_matches"]("│ 98 │ old code │ 99 │ selected", 99))
 
+    def test_review_comment_target_lines_include_local_and_remote_ranges(self) -> None:
+        """Highlight local markers and the full range covered by remote comments."""
+        review = load_review()
+        local_comment = review["ReviewComment"]("src/app.py", 10, 9, "Please simplify.")
+        remote_note = review["RemoteNote"](
+            "src/app.py",
+            12,
+            "alice",
+            "Please adjust these lines.",
+            "note-1",
+            start_line=10,
+        )
+        remote_thread = review["RemoteThread"]("thread-1", "src/app.py", 12, (remote_note,))
+
+        lines = review["review_comment_target_lines"]([local_comment], [remote_thread])
+
+        self.assertEqual(lines, {9, 10, 11, 12})
+
+    def test_comment_highlight_segments_use_muted_reverse(self) -> None:
+        """Style highlighted diff rows with the muted reverse comment color."""
+        review = load_review()
+        review["THEME_COLOR_NUMBERS"]["comment"] = 4
+        segment = review["StyledSegment"]("selected", 2, False, False)
+
+        highlighted = review["comment_highlight_segments"]([segment])
+
+        self.assertEqual(highlighted, [review["StyledSegment"]("selected", 4, False, True)])
+
     def test_open_review_request_skips_empty_review_range(self) -> None:
         """Do not delegate to provider CLIs when there are no changed files."""
         review = load_review()
@@ -286,6 +314,38 @@ class ReviewRangeTest(unittest.TestCase):
 
         app.file_filter = "ignored"
         self.assertEqual([changed_file.path for changed_file in app.visible_files()], ["src/ignored.py"])
+
+    def test_visible_files_support_comments_filter(self) -> None:
+        """Show only changed files with local review comments."""
+        review = load_review()
+        app = review["ReviewApp"].__new__(review["ReviewApp"])
+        app.files = [
+            review["ChangedFile"](1, "src/app.py"),
+            review["ChangedFile"](2, "docs/readme.md"),
+        ]
+        app.reviewed = set()
+        app.ignored = set()
+        app.search_query = ""
+        app.search_error = ""
+        app.comments_by_path = {
+            "docs/readme.md": [review["ReviewComment"]("docs/readme.md", 4, 3, "Clarify setup.")],
+        }
+
+        app.file_filter = "comments"
+
+        self.assertEqual([changed_file.path for changed_file in app.visible_files()], ["docs/readme.md"])
+
+    def test_local_comment_indicator_lines_include_comment_bodies(self) -> None:
+        """Render compact local comment rows with the actual marker body."""
+        review = load_review()
+        comments = [
+            review["ReviewComment"]("src/app.py", 10, 9, "Rename this variable."),
+            review["ReviewComment"]("src/app.py", 12, 11, "Handle missing config."),
+        ]
+
+        lines = review["local_comment_indicator_lines"](comments, 1)
+
+        self.assertEqual(lines, ["local 9: Rename this variable. (+1 more)"])
 
     def test_ignore_patterns_match_paths_directories_and_globs(self) -> None:
         """Match exact paths, directory prefixes, and glob patterns."""
@@ -784,6 +844,7 @@ class HelpPopupTest(unittest.TestCase):
 
         self.assertIn("Main", text)
         self.assertIn("?            show this help", text)
+        self.assertIn("f            cycle all/unchecked/checked/ignored/comments filters", text)
         self.assertIn("m            open comments popup", text)
         self.assertIn("t            open Jira ticket popup", text)
         self.assertIn("Comments Popup", text)

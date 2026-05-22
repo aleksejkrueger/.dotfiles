@@ -24,7 +24,7 @@ Useful keys in the UI:
 - / starts regex file search.
 - Space toggles the reviewed checkbox for the selected file.
 - i toggles the ignored flag for the selected file.
-- f cycles all/unchecked/checked/ignored filters.
+- f cycles all/unchecked/checked/ignored/comments filters.
 - n/N jumps to the next or previous unreviewed file.
 - c/e opens the selected file in the configured editor.
 - d opens the selected diff in the pager.
@@ -99,7 +99,7 @@ HELP_TEXT = (
     "? help  / search  f filter  n/N next/previous  j/k move  J/K scroll  Space check  i ignore  c/e edit  m comments  t ticket  d pager  o open  R remote  "
     "p publish  r refresh  q quit"
 )
-FILE_FILTERS = ("all", "unchecked", "checked", "ignored")
+FILE_FILTERS = ("all", "unchecked", "checked", "ignored", "comments")
 DRACULA_ANSI_COLORS = {
     "foreground": 15,
     "comment": 4,
@@ -979,6 +979,30 @@ def comments_by_path(files: Sequence[ChangedFile]) -> dict[str, list[ReviewComme
     return comments
 
 
+def one_line_comment_body(body: str) -> str:
+    """Return a review comment body compressed for one-line display."""
+    return re.sub(r"\s+", " ", body).strip() or "(empty)"
+
+
+def local_comment_indicator(comment: ReviewComment) -> str:
+    """Return a compact local review comment indicator."""
+    return f"local {comment.target_line}: {one_line_comment_body(comment.body)}"
+
+
+def local_comment_indicator_lines(comments: Sequence[ReviewComment], limit: int) -> list[str]:
+    """Return compact local review comment rows for a limited-height pane."""
+    if limit <= 0:
+        return []
+
+    visible_comments = comments[:limit]
+    lines = [local_comment_indicator(comment) for comment in visible_comments]
+    hidden_count = len(comments) - len(visible_comments)
+    if hidden_count and lines:
+        suffix = f" (+{hidden_count} more)"
+        lines[-1] = f"{lines[-1]}{suffix}"
+    return lines
+
+
 def remove_published_markers_from_file(path: str, published_ids: set[str]) -> int:
     """Remove standalone local review marker lines by comment ID."""
     file_path = Path(path)
@@ -1214,6 +1238,39 @@ def rendered_new_line_matches(line: str, line_number: int) -> bool:
     if len(parts) >= 5:
         return parts[3].strip() == str(line_number)
     return re.search(rf"(?<!\d){line_number}(?!\d)", text) is not None
+
+
+def remote_thread_target_lines(thread: RemoteThread) -> set[int]:
+    """Return new-side line numbers covered by a remote review thread."""
+    lines = {thread.line} if thread.line > 0 else set()
+    for note in thread.notes:
+        start = note.start_line or note.line
+        end = note.line
+        if start > 0 and end > 0:
+            lines.update(range(min(start, end), max(start, end) + 1))
+    return lines
+
+
+def review_comment_target_lines(
+    local_comments: Sequence[ReviewComment],
+    remote_threads: Sequence[RemoteThread],
+) -> set[int]:
+    """Return new-side line numbers that have local or remote review comments."""
+    lines = {comment.target_line for comment in local_comments if comment.target_line > 0}
+    for thread in remote_threads:
+        lines.update(remote_thread_target_lines(thread))
+    return lines
+
+
+def rendered_new_line_matches_any(line: str, line_numbers: set[int]) -> bool:
+    """Return whether a rendered diff row belongs to any target line."""
+    return any(rendered_new_line_matches(line, line_number) for line_number in line_numbers)
+
+
+def comment_highlight_segments(segments: Sequence[StyledSegment]) -> list[StyledSegment]:
+    """Return diff segments styled for a highlighted review comment line."""
+    highlight = theme_color("comment")
+    return [StyledSegment(segment.text, highlight, segment.bold, True) for segment in segments]
 
 
 def file_newline(text: str) -> str:
@@ -2546,7 +2603,7 @@ def help_popup_lines(width: int) -> list[tuple[str, int]]:
             ("J/K", "scroll the diff"),
             ("Space", "toggle reviewed checkbox"),
             ("i", "toggle ignored flag"),
-            ("f", "cycle all/unchecked/checked/ignored filters"),
+            ("f", "cycle all/unchecked/checked/ignored/comments filters"),
             ("n/N", "jump next/previous unreviewed file"),
             ("c/e", "open selected file in editor"),
             ("d", "open selected diff in pager"),
@@ -2733,7 +2790,7 @@ class ReviewApp:
         return files[self.selected]
 
     def visible_files(self) -> list[ChangedFile]:
-        """Return changed files matching the active regex search."""
+        """Return changed files matching the active file filters and regex search."""
         files = self.files
         if self.file_filter == "checked":
             files = [
@@ -2749,6 +2806,8 @@ class ReviewApp:
             ]
         elif self.file_filter == "ignored":
             files = [changed_file for changed_file in files if changed_file.path in self.ignored]
+        elif self.file_filter == "comments":
+            files = [changed_file for changed_file in files if changed_file.path in self.comments_by_path]
 
         if not self.search_query:
             self.search_error = ""
@@ -2891,7 +2950,7 @@ class ReviewApp:
         self.message = "Search cleared."
 
     def cycle_file_filter(self) -> None:
-        """Cycle file list filter between all, unchecked, and checked files."""
+        """Cycle the file list filter."""
         index = FILE_FILTERS.index(self.file_filter)
         self.file_filter = FILE_FILTERS[(index + 1) % len(FILE_FILTERS)]
         self.selected = 0
@@ -3777,6 +3836,10 @@ class ReviewApp:
         if cache_key not in self.diff_cache:
             self.diff_cache[cache_key] = side_by_side_diff_lines(self.ref_range, current.path, width, self.branch)
         lines = self.diff_cache[cache_key]
+        comment_lines = review_comment_target_lines(
+            self.comments_by_path.get(current.path, []),
+            self.remote_threads_by_path.get(current.path, []),
+        )
         max_scroll = max(0, len(lines) - height + 1)
         self.diff_scroll = max(0, min(self.diff_scroll, max_scroll))
 
@@ -3784,10 +3847,14 @@ class ReviewApp:
             index = self.diff_scroll + row
             line = lines[index] if index < len(lines) else ""
             segments = parse_ansi_line(line)
+            has_comment = rendered_new_line_matches_any(line, comment_lines)
+            if has_comment:
+                segments = comment_highlight_segments(segments)
             add_styled_text(self.screen, y + row + 1, x, segments, width)
             padding = width - visible_length(segments)
             if padding > 0:
-                add_text(self.screen, y + row + 1, x + width - padding, " " * padding, padding)
+                mode = color_pair(theme_color("comment"), reverse=True) if has_comment else 0
+                add_text(self.screen, y + row + 1, x + width - padding, " " * padding, padding, mode)
 
     def draw_comments(self, y: int, x: int, height: int, width: int) -> None:
         """Draw comments for the selected file."""
@@ -3815,12 +3882,15 @@ class ReviewApp:
             f"{suggestion_count} suggestions / {draft_count} drafts"
         )
         add_text(self.screen, y + 1, x, summary.ljust(width), width, color_pair(theme_color("foreground")))
-        if height > 2 and local_comments:
-            local_lines = ", ".join(str(comment.target_line) for comment in local_comments)
-            add_text(self.screen, y + 2, x, f"local lines: {local_lines}".ljust(width), width, color_pair(theme_color("yellow")))
-        if height > 3 and remote_threads:
+        available_rows = max(0, height - 2)
+        remote_row_count = 1 if remote_threads and (not local_comments or available_rows > 1) else 0
+        local_rows = local_comment_indicator_lines(local_comments, available_rows - remote_row_count)
+        for index, line in enumerate(local_rows):
+            add_text(self.screen, y + 2 + index, x, line.ljust(width), width, color_pair(theme_color("yellow")))
+        remote_y = y + 2 + len(local_rows)
+        if remote_threads and remote_y < y + height:
             remote_lines = ", ".join(str(thread.line) for thread in remote_threads)
-            add_text(self.screen, y + 3, x, f"remote lines: {remote_lines}".ljust(width), width, color_pair(theme_color("green")))
+            add_text(self.screen, remote_y, x, f"remote lines: {remote_lines}".ljust(width), width, color_pair(theme_color("green")))
 
 
 def interactive(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> None:
