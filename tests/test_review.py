@@ -55,6 +55,264 @@ class EditorCommandTest(unittest.TestCase):
         self.assertEqual(command, ["zed", "src/review"])
 
 
+class ReviewRangeTest(unittest.TestCase):
+    """Tests for review range selection and command construction."""
+
+    def test_diff_ref_uses_three_dot_for_branch_review(self) -> None:
+        """Use merge-base comparison for the normal base branch flow."""
+        review = load_review()
+        ref_range = review["review_range"]("main")
+
+        self.assertEqual(review["diff_ref"](ref_range), "main...HEAD")
+
+    def test_diff_ref_uses_two_dot_for_explicit_refs(self) -> None:
+        """Use exact two-ref comparison for --from/--to."""
+        review = load_review()
+        ref_range = review["review_range"]("abc123", "def456", explicit=True)
+
+        self.assertEqual(review["diff_ref"](ref_range), "abc123..def456")
+
+    def test_state_key_keeps_branch_name_for_base_review(self) -> None:
+        """Keep existing state directories for base-vs-current-branch reviews."""
+        review = load_review()
+
+        def fake_branch_name() -> str:
+            """Return a stable branch name for state-key assertions."""
+            return "feature/demo"
+
+        review["state_key"].__globals__["branch_name"] = fake_branch_name
+
+        self.assertEqual(review["state_key"](review["review_range"]("main")), "main...feature-demo")
+
+    def test_normalize_args_moves_explicit_range_before_subcommand(self) -> None:
+        """Allow --from and --to after a subcommand."""
+        review = load_review()
+
+        normalized = review["normalize_args"](["status", "--from", "abc123", "--to=def456"])
+
+        self.assertEqual(normalized, ["--from", "abc123", "--to=def456", "status"])
+
+    def test_normalize_args_moves_ignore_before_subcommand(self) -> None:
+        """Allow --ignore after a subcommand."""
+        review = load_review()
+
+        normalized = review["normalize_args"](["status", "--ignore", "tests/*", "--ignore=*.md"])
+
+        self.assertEqual(normalized, ["--ignore", "tests/*", "--ignore=*.md", "status"])
+
+    def test_review_range_from_args_builds_explicit_range(self) -> None:
+        """Build a ReviewRange from explicit refs."""
+        review = load_review()
+        parser = review["parser"]()
+        args = parser.parse_args(review["normalize_args"](["status", "--from", "abc123", "--to", "def456"]))
+
+        ref_range = review["review_range_from_args"](args)
+
+        self.assertEqual(ref_range.base, "abc123")
+        self.assertEqual(ref_range.target, "def456")
+        self.assertTrue(ref_range.explicit)
+
+    def test_diff_command_uses_explicit_range_and_labels(self) -> None:
+        """Build git diff with two-dot refs for explicit comparisons."""
+        review = load_review()
+        ref_range = review["review_range"]("abc123", "def456", explicit=True)
+
+        command = review["diff_command"](ref_range, "src/app.py", "feature/demo")
+
+        self.assertIn("abc123..def456", command)
+        self.assertIn("--src-prefix=abc123/", command)
+        self.assertIn("--dst-prefix=def456/", command)
+
+    def test_rendered_new_line_matches_right_side_line_number(self) -> None:
+        """Match the new-side diff line number, not the old side or code text."""
+        review = load_review()
+
+        self.assertFalse(review["rendered_new_line_matches"]("│ 99 │ old code │ 98 │ value = 99", 99))
+        self.assertTrue(review["rendered_new_line_matches"]("│ 98 │ old code │ 99 │ selected", 99))
+
+    def test_open_review_request_skips_empty_review_range(self) -> None:
+        """Do not delegate to provider CLIs when there are no changed files."""
+        review = load_review()
+        app = review["ReviewApp"].__new__(review["ReviewApp"])
+        app.files = []
+        app.ref_range = review["review_range"]("main")
+        called = False
+
+        def fake_detect_provider() -> str:
+            """Fail if provider detection is reached."""
+            nonlocal called
+            called = True
+            return "gitlab"
+
+        review["ReviewApp"].open_review_request.__globals__["detect_provider"] = fake_detect_provider
+
+        app.open_review_request()
+
+        self.assertFalse(called)
+        self.assertEqual(app.message, "Open cancelled: no changed files in main...HEAD.")
+
+    def test_jump_diff_to_line_scrolls_to_exact_rendered_line(self) -> None:
+        """Put the requested rendered diff line at the top of the diff pane."""
+        review = load_review()
+
+        class FakeScreen:
+            """Minimal screen object for jump tests."""
+
+            def getmaxyx(self) -> tuple[int, int]:
+                """Return a stable terminal size."""
+                return 40, 120
+
+        app = review["ReviewApp"].__new__(review["ReviewApp"])
+        app.screen = FakeScreen()
+        app.ref_range = review["review_range"]("main")
+        app.branch = "feature/demo"
+        app.diff_scroll = 0
+        app.diff_cache = {
+            ("src/app.py", 120): [
+                "│ 97 │ old │ 97 │ previous",
+                "│ 99 │ old │ 98 │ context 99",
+                "│ 98 │ old │ 99 │ selected",
+                "│ 100 │ old │ 100 │ next",
+            ]
+        }
+
+        found = app.jump_diff_to_line("src/app.py", 99)
+
+        self.assertTrue(found)
+        self.assertEqual(app.diff_scroll, 2)
+
+    def test_checked_files_returns_reviewed_changed_files(self) -> None:
+        """List only changed files marked reviewed in state."""
+        review = load_review()
+        ref_range = review["review_range"]("main")
+
+        def fake_changed_files(range_arg: object, ignore_patterns: object = ()) -> list[object]:
+            """Return a stable changed file list."""
+            self.assertEqual(range_arg, ref_range)
+            self.assertEqual(ignore_patterns, ("docs/*",))
+            return [
+                review["ChangedFile"](1, "src/one.py"),
+                review["ChangedFile"](2, "src/two.py"),
+                review["ChangedFile"](3, "src/three.py"),
+            ]
+
+        def fake_load_state(range_arg: object) -> dict[str, object]:
+            """Return reviewed state with one stale path."""
+            self.assertEqual(range_arg, ref_range)
+            return {"reviewed": ["src/two.py", "stale.py"]}
+
+        checked_files = review["checked_files"]
+        checked_files.__globals__["changed_files"] = fake_changed_files
+        checked_files.__globals__["load_state"] = fake_load_state
+
+        files = checked_files(ref_range, ("docs/*",))
+
+        self.assertEqual([changed_file.path for changed_file in files], ["src/two.py"])
+
+    def test_reviewable_files_skip_ignored_files_and_renumber(self) -> None:
+        """Return only non-ignored changed files with stable display indexes."""
+        review = load_review()
+        ref_range = review["review_range"]("main")
+
+        def fake_changed_files(range_arg: object, ignore_patterns: object = ()) -> list[object]:
+            """Return a stable changed file list."""
+            self.assertEqual(range_arg, ref_range)
+            self.assertEqual(ignore_patterns, ("*.lock",))
+            return [
+                review["ChangedFile"](1, "src/one.py"),
+                review["ChangedFile"](2, "src/two.py"),
+                review["ChangedFile"](3, "src/three.py"),
+            ]
+
+        def fake_load_state(range_arg: object) -> dict[str, object]:
+            """Return ignored state."""
+            self.assertEqual(range_arg, ref_range)
+            return {"ignored": ["src/two.py"]}
+
+        reviewable_files = review["reviewable_files"]
+        reviewable_files.__globals__["changed_files"] = fake_changed_files
+        reviewable_files.__globals__["load_state"] = fake_load_state
+
+        files = reviewable_files(ref_range, ("*.lock",))
+
+        self.assertEqual(
+            [(changed_file.index, changed_file.path) for changed_file in files],
+            [(1, "src/one.py"), (2, "src/three.py")],
+        )
+
+    def test_toggle_ignored_persists_ignored_paths(self) -> None:
+        """Toggle ignored file paths in review state."""
+        review = load_review()
+        state: dict[str, object] = {"ignored": ["src/old.py"], "reviewed": ["src/app.py"]}
+        saved_states: list[dict[str, object]] = []
+
+        def fake_load_state(scope: object) -> dict[str, object]:
+            """Return the current in-memory state."""
+            return state
+
+        def fake_save_state(scope: object, updated_state: dict[str, object]) -> None:
+            """Record saved state."""
+            snapshot = updated_state.copy()
+            saved_states.append(snapshot)
+            state.clear()
+            state.update(snapshot)
+
+        toggle_ignored = review["toggle_ignored"]
+        toggle_ignored.__globals__["load_state"] = fake_load_state
+        toggle_ignored.__globals__["save_state"] = fake_save_state
+
+        self.assertTrue(toggle_ignored("main", "src/app.py"))
+        self.assertFalse(toggle_ignored("main", "src/app.py"))
+
+        self.assertEqual(saved_states[0]["ignored"], ["src/app.py", "src/old.py"])
+        self.assertEqual(saved_states[1]["ignored"], ["src/old.py"])
+
+    def test_visible_files_support_ignored_filter(self) -> None:
+        """Keep ignored files visible only in all or ignored filters."""
+        review = load_review()
+        app = review["ReviewApp"].__new__(review["ReviewApp"])
+        app.files = [
+            review["ChangedFile"](1, "src/checked.py"),
+            review["ChangedFile"](2, "src/ignored.py"),
+            review["ChangedFile"](3, "src/open.py"),
+        ]
+        app.reviewed = {"src/checked.py"}
+        app.ignored = {"src/ignored.py"}
+        app.search_query = ""
+        app.search_error = ""
+
+        app.file_filter = "unchecked"
+        self.assertEqual([changed_file.path for changed_file in app.visible_files()], ["src/open.py"])
+
+        app.file_filter = "ignored"
+        self.assertEqual([changed_file.path for changed_file in app.visible_files()], ["src/ignored.py"])
+
+    def test_ignore_patterns_match_paths_directories_and_globs(self) -> None:
+        """Match exact paths, directory prefixes, and glob patterns."""
+        review = load_review()
+        ignored_path = review["ignored_path"]
+
+        self.assertTrue(ignored_path("src/app.py", ("src/app.py",)))
+        self.assertTrue(ignored_path("src/package/app.py", ("src",)))
+        self.assertTrue(ignored_path("docs/readme.md", ("*.md",)))
+        self.assertFalse(ignored_path("src/app.py", ("tests/*",)))
+
+    def test_changed_files_filters_ignored_paths_and_renumbers(self) -> None:
+        """Hide ignored paths before assigning display indexes."""
+        review = load_review()
+        ref_range = review["review_range"]("main")
+
+        def fake_check_output(command: list[str], stderr: object) -> bytes:
+            """Return a nul-separated git diff path list."""
+            self.assertEqual(command[:4], ["git", "diff", "--name-only", "-z"])
+            return b"src/app.py\0tests/test_app.py\0README.md\0"
+
+        with patch("subprocess.check_output", fake_check_output):
+            files = review["changed_files"](ref_range, ("tests", "*.md"))
+
+        self.assertEqual([(changed_file.index, changed_file.path) for changed_file in files], [(1, "src/app.py")])
+
+
 class ReplyDraftTest(unittest.TestCase):
     """Tests for reply draft state helpers."""
 
@@ -383,6 +641,155 @@ class ThreadActionTest(unittest.TestCase):
             commands = review["clipboard_commands"]()
 
         self.assertEqual(commands, [["pbcopy"]])
+
+
+class JiraIntegrationTest(unittest.TestCase):
+    """Tests for Jira popup data helpers."""
+
+    def test_jira_config_reads_work_config_and_jiratui_token(self) -> None:
+        """Load Jira URL and user from work config without sourcing shell code."""
+        review = load_review()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work_config = root / "work.zsh"
+            work_config.write_text(
+                "\n".join(
+                    (
+                        "export JIRA_URL=https://jira.example.test",
+                        "export JIRA_NAME=dev@example.test",
+                        "export JIRA_TOKEN=$(pass jira/token)",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            jiratui_config = root / ".config" / "jiratui" / "config.yaml"
+            jiratui_config.parent.mkdir(parents=True)
+            jiratui_config.write_text("jira_api_token: yaml-token\n", encoding="utf-8")
+
+            with patch.dict("os.environ", {"HOME": str(root), "WORK_CONFIG": str(work_config)}, clear=True):
+                config = review["jira_config"]()
+
+        self.assertEqual(config.base_url, "https://jira.example.test")
+        self.assertEqual(config.user, "dev@example.test")
+        self.assertEqual(config.token, "yaml-token")
+
+    def test_jira_issue_key_from_branch(self) -> None:
+        """Find a Jira issue key in a branch name."""
+        review = load_review()
+
+        self.assertEqual(review["jira_issue_key_from_text"]("feat/IPRO-123-something"), "IPRO-123")
+
+    def test_jira_issue_from_json_maps_important_fields(self) -> None:
+        """Parse important Jira issue fields and comments."""
+        review = load_review()
+        config = review["JiraConfig"]("https://jira.example.test", "dev@example.test", "token", "")
+        raw_issue = {
+            "key": "IPRO-123",
+            "fields": {
+                "summary": "Improve review tool",
+                "status": {"name": "In Progress"},
+                "issuetype": {"name": "Story"},
+                "priority": {"name": "High"},
+                "assignee": {"displayName": "Alice"},
+                "reporter": {"displayName": "Bob"},
+                "resolution": None,
+                "labels": ["review"],
+                "components": [{"name": "CLI"}],
+                "fixVersions": [{"name": "1.2"}],
+                "created": "2026-05-20T10:00:00.000+0000",
+                "updated": "2026-05-21T11:00:00.000+0000",
+                "description": "Ticket body",
+            },
+        }
+        comment = review["JiraComment"]("Alice", "Looks good.", "2026-05-21T12:00:00.000+0000", "")
+
+        issue = review["jira_issue_from_json"](config, raw_issue, [comment])
+
+        self.assertEqual(issue.key, "IPRO-123")
+        self.assertEqual(issue.url, "https://jira.example.test/browse/IPRO-123")
+        self.assertEqual(issue.summary, "Improve review tool")
+        self.assertEqual(issue.status, "In Progress")
+        self.assertEqual(issue.assignee, "Alice")
+        self.assertEqual(issue.components, ("CLI",))
+        self.assertEqual(issue.comments, (comment,))
+
+    def test_jira_comment_from_json_supports_document_body(self) -> None:
+        """Convert Jira document-style comment bodies to readable text."""
+        review = load_review()
+        raw_comment = {
+            "author": {"displayName": "Alice"},
+            "body": {"content": [{"content": [{"text": "Hello"}]}, {"content": [{"text": "World"}]}]},
+            "created": "2026-05-21T12:00:00.000+0000",
+            "updated": "2026-05-21T12:01:00.000+0000",
+        }
+
+        comment = review["jira_comment_from_json"](raw_comment)
+
+        self.assertEqual(comment.author, "Alice")
+        self.assertEqual(comment.body, "Hello\nWorld")
+
+    def test_jira_issue_popup_lines_include_comments(self) -> None:
+        """Render Jira ticket details and comments for the popup."""
+        review = load_review()
+
+        def fake_color_pair(color: int, reverse: bool = False) -> int:
+            """Avoid curses color initialization in tests."""
+            return 0
+
+        review["color_pair"] = fake_color_pair
+        comment = review["JiraComment"]("Alice", "Please check this.", "2026-05-21T12:00:00.000+0000", "")
+        issue = review["JiraIssue"](
+            "IPRO-123",
+            "https://jira.example.test/browse/IPRO-123",
+            "Improve review tool",
+            "In Progress",
+            "Story",
+            "High",
+            "Alice",
+            "Bob",
+            "unresolved",
+            ("review",),
+            ("CLI",),
+            ("1.2",),
+            "2026-05-20T10:00:00.000+0000",
+            "2026-05-21T11:00:00.000+0000",
+            "Ticket body",
+            (comment,),
+        )
+
+        lines = review["jira_issue_popup_lines"](issue, 80)
+        text = "\n".join(line for line, _mode in lines)
+
+        self.assertIn("IPRO-123", text)
+        self.assertIn("Status: In Progress", text)
+        self.assertIn("Comments (1)", text)
+        self.assertIn("Please check this.", text)
+
+
+class HelpPopupTest(unittest.TestCase):
+    """Tests for in-app help rendering."""
+
+    def test_help_popup_lines_include_main_comment_and_jira_keys(self) -> None:
+        """Render useful help for the main TUI and popups."""
+        review = load_review()
+
+        def fake_color_pair(color: int, reverse: bool = False) -> int:
+            """Avoid curses color initialization in tests."""
+            return 0
+
+        review["color_pair"] = fake_color_pair
+
+        lines = review["help_popup_lines"](100)
+        text = "\n".join(line for line, _mode in lines)
+
+        self.assertIn("Main", text)
+        self.assertIn("?            show this help", text)
+        self.assertIn("m            open comments popup", text)
+        self.assertIn("t            open Jira ticket popup", text)
+        self.assertIn("Comments Popup", text)
+        self.assertIn("A            apply selected suggestion", text)
+        self.assertIn("Jira Popup", text)
+        self.assertIn("a            add a Jira comment", text)
 
 
 if __name__ == "__main__":

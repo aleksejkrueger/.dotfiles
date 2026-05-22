@@ -48,6 +48,9 @@ require('render-markdown').setup({
   file_types = { 'markdown', 'Avante' },
 })
 
+local codex_acp_model = os.getenv("AVANTE_CODEX_MODEL") or "gpt-5.4"
+local codex_acp_reasoning_effort = os.getenv("AVANTE_CODEX_REASONING_EFFORT") or "xhigh"
+
 local avante_config = {
   ---@alias Provider "codex"
   ---@type Provider
@@ -57,6 +60,23 @@ local avante_config = {
   ---@type Mode
   mode = "legacy",
   auto_suggestions_provider = "codex",
+  acp_providers = {
+    codex = {
+      command = "codex-acp",
+      args = {
+        "-c",
+        'model="' .. codex_acp_model .. '"',
+        "-c",
+        'model_reasoning_effort="' .. codex_acp_reasoning_effort .. '"',
+      },
+      env = {
+        HOME = os.getenv("HOME"),
+        NODE_NO_WARNINGS = "1",
+        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY"),
+        PATH = os.getenv("PATH"),
+      },
+    },
+  },
   providers = {
   },
   behaviour = {

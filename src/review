@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Terminal review helper for branch changes.
 
-review compares the current branch against a base ref, shows changed files in a
-full-screen curses UI, and stores per-file reviewed checkboxes under
-.git/review/<base>...<branch>/state.json. The default UI keeps a side-by-side
-diff at the top, a compact comment summary below it, and the changed-file list at
-the bottom.
+review compares the current branch against a base ref, or compares two explicit
+refs with --from and --to, shows changed files in a full-screen curses UI, and
+stores per-file reviewed checkboxes under .git/review/<range>/state.json. The
+default UI keeps a side-by-side diff at the top, a compact comment summary below
+it, and the changed-file list at the bottom.
 
 Local review comments are written directly into changed files with markers such
 as "#review this is hard to read". Publishing scans those markers, creates
@@ -20,9 +20,11 @@ comment from inside the tool. Reply drafts are saved in the same review state
 file and can be published later from the comments popup.
 
 Useful keys in the UI:
+- ? opens the in-app help popup.
 - / starts regex file search.
 - Space toggles the reviewed checkbox for the selected file.
-- f cycles all/unchecked/checked filters.
+- i toggles the ignored flag for the selected file.
+- f cycles all/unchecked/checked/ignored filters.
 - n/N jumps to the next or previous unreviewed file.
 - c/e opens the selected file in the configured editor.
 - d opens the selected diff in the pager.
@@ -32,6 +34,8 @@ Useful keys in the UI:
   working tree, u undoes the last applied suggestion, x deletes the selected
   draft, r replies now, s toggles GitLab resolution, y copies the selected body,
   and g jumps to code.
+- t opens the Jira ticket popup for JIRA_KEY or the issue key in the branch,
+  shows ticket details and comments, and allows adding a Jira comment.
 - o opens the current GitLab MR or GitHub PR in the browser.
 - p publishes local #review markers, with output shown in a popup.
 
@@ -43,19 +47,29 @@ VISUAL is used first, then EDITOR, then nvim. Examples:
 - EDITOR=vim review
 
 For a lightweight picker instead of the full TUI, run "review --fast". It opens
-fzf with a delta-powered preview above the file list and respects --base.
+fzf with a delta-powered preview above the file list and respects --base,
+--from, and --to.
+
+Use --ignore PATTERN to hide files from the review file list. The flag can be
+passed multiple times and accepts exact paths, directory prefixes, or shell-style
+globs:
+- review --ignore 'tests/*'
+- review status --ignore '*.md'
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import curses
+import fnmatch
 import hashlib
 import json
 import os
 import re
 import shutil
 import shlex
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -64,7 +78,9 @@ from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, Sequence
-from urllib.parse import quote
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
 
 
 REVIEW_MARKER_RE = re.compile(r"(?P<prefix>#|//|--|;|/\*|\*)\s*review\b:?\s*(?P<body>.*)$", re.IGNORECASE)
@@ -76,12 +92,14 @@ SUGGESTION_BLOCK_RE = re.compile(
     r"(?ms)^```suggestion(?P<meta>[^\n`]*)\n(?P<body>.*?)(?:\n```|\Z)"
 )
 SUGGESTION_RANGE_RE = re.compile(r":(?P<start>[+-]?\d+)(?P<end>[+-]\d+)")
+EXPORT_RE = re.compile(r"^\s*export\s+(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$")
+JIRA_KEY_RE = re.compile(r"(?<![A-Z0-9])(?P<key>[A-Z][A-Z0-9]+-\d+)(?![A-Z0-9])")
 BASIC_ANSI_COLOR_CODES = {*range(30, 38), *range(90, 98)}
 HELP_TEXT = (
-    "/ search  f filter  n/N next/previous  j/k move  J/K scroll  Space toggle  c/e edit  m comments  d pager  o open  R remote  "
+    "? help  / search  f filter  n/N next/previous  j/k move  J/K scroll  Space check  i ignore  c/e edit  m comments  t ticket  d pager  o open  R remote  "
     "p publish  r refresh  q quit"
 )
-FILE_FILTERS = ("all", "unchecked", "checked")
+FILE_FILTERS = ("all", "unchecked", "checked", "ignored")
 DRACULA_ANSI_COLORS = {
     "foreground": 15,
     "comment": 4,
@@ -97,7 +115,7 @@ DRACULA_ANSI_COLORS = {
 
 @dataclass(frozen=True)
 class ChangedFile:
-    """A file changed against the selected base ref."""
+    """A file changed in the selected review range."""
 
     index: int
     path: str
@@ -111,6 +129,18 @@ class ReviewComment:
     marker_line: int
     target_line: int
     body: str
+
+
+@dataclass(frozen=True)
+class ReviewRange:
+    """The git revision range currently being reviewed."""
+
+    base: str
+    target: str = "HEAD"
+    explicit: bool = False
+
+
+StateScope = str | ReviewRange
 
 
 @dataclass(frozen=True)
@@ -180,6 +210,48 @@ class SuggestionUndo:
     suggestion_id: str
     start_line: int
     end_line: int
+
+
+@dataclass(frozen=True)
+class JiraConfig:
+    """Connection settings for Jira REST API calls."""
+
+    base_url: str
+    user: str
+    token: str
+    ca_file: str
+
+
+@dataclass(frozen=True)
+class JiraComment:
+    """One Jira issue comment."""
+
+    author: str
+    body: str
+    created: str
+    updated: str
+
+
+@dataclass(frozen=True)
+class JiraIssue:
+    """A Jira issue with comments for popup display."""
+
+    key: str
+    url: str
+    summary: str
+    status: str
+    issue_type: str
+    priority: str
+    assignee: str
+    reporter: str
+    resolution: str
+    labels: tuple[str, ...]
+    components: tuple[str, ...]
+    fix_versions: tuple[str, ...]
+    created: str
+    updated: str
+    description: str
+    comments: tuple[JiraComment, ...]
 
 
 @dataclass(frozen=True)
@@ -281,6 +353,102 @@ def branch_name() -> str:
     return branch or "HEAD"
 
 
+def work_config_path() -> Path:
+    """Return the work config path used for Jira settings."""
+    return Path(os.environ.get("WORK_CONFIG", str(Path.home() / ".work" / "work.zsh"))).expanduser()
+
+
+def parse_shell_export_value(value: str) -> str:
+    """Parse a simple shell export value without executing shell code."""
+    if "$(" in value or "`" in value:
+        return ""
+    try:
+        parts = shlex.split(value, posix=True)
+    except ValueError:
+        return value.strip().strip("\"'")
+    return parts[0] if parts else ""
+
+
+def exported_config(path: Path) -> dict[str, str]:
+    """Return exported KEY=value entries from a shell config file."""
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            match = EXPORT_RE.match(line)
+            if match is None:
+                continue
+            value = parse_shell_export_value(match.group("value").strip())
+            if value:
+                values[match.group("key")] = value
+    return values
+
+
+def yaml_config_value(key: str, path: Path) -> str:
+    """Return a simple top-level YAML scalar value."""
+    if not path.is_file():
+        return ""
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            raw_key, separator, raw_value = line.partition(":")
+            if separator and raw_key.strip() == key:
+                return raw_value.strip().strip("\"'")
+    return ""
+
+
+def first_config_value(config: dict[str, str], names: Sequence[str]) -> str:
+    """Return the first non-empty value from the environment or config."""
+    for name in names:
+        value = os.environ.get(name) or config.get(name) or ""
+        if value:
+            return value
+    return ""
+
+
+def normalized_base_url(value: str) -> str:
+    """Return a normalized base URL."""
+    if not value:
+        return ""
+    base_url = value if value.startswith(("http://", "https://")) else f"https://{value}"
+    return base_url.rstrip("/")
+
+
+def readable_ca_file(config: dict[str, str]) -> str:
+    """Return a readable CA bundle path from environment or work config."""
+    for name in ("CURL_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        value = os.environ.get(name) or config.get(name) or ""
+        path = Path(value).expanduser()
+        if value and path.is_file():
+            return str(path)
+    return ""
+
+
+def jira_config() -> JiraConfig:
+    """Return Jira REST API configuration from environment and work config."""
+    config = exported_config(work_config_path())
+    token = first_config_value(config, ("JIRA_TOKEN", "JIRA_API_TOKEN", "JIRA_PAT", "ATLASSIAN_API_TOKEN", "JIRA_PASSWORD"))
+    if not token:
+        token = yaml_config_value("jira_api_token", Path.home() / ".config" / "jiratui" / "config.yaml")
+    return JiraConfig(
+        base_url=normalized_base_url(first_config_value(config, ("JIRA_BASE_URL", "JIRA_API_URL", "JIRA_URL", "JIRA_HOST"))),
+        user=first_config_value(config, ("JIRA_EMAIL", "JIRA_USER", "JIRA_USERNAME", "JIRA_NAME")),
+        token=token,
+        ca_file=readable_ca_file(config),
+    )
+
+
+def jira_issue_key_from_text(value: str) -> str:
+    """Return the first Jira issue key found in text."""
+    match = JIRA_KEY_RE.search(value.upper())
+    return match.group("key") if match is not None else ""
+
+
+def current_jira_issue_key(branch: str) -> str:
+    """Return the Jira issue key for the current review context."""
+    return (os.environ.get("JIRA_KEY") or jira_issue_key_from_text(branch)).upper()
+
+
 def ref_exists(ref: str) -> bool:
     """Return whether a git ref exists."""
     return (
@@ -311,9 +479,48 @@ def default_base() -> str:
     return "main"
 
 
+def review_range(base: str, target: str = "HEAD", *, explicit: bool = False) -> ReviewRange:
+    """Create a review range."""
+    return ReviewRange(base=base, target=target, explicit=explicit)
+
+
+def range_label(ref_range: ReviewRange) -> str:
+    """Return a human readable review range label."""
+    separator = ".." if ref_range.explicit else "..."
+    return f"{ref_range.base}{separator}{ref_range.target}"
+
+
+def display_range_label(ref_range: ReviewRange, branch: str | None = None) -> str:
+    """Return a review range label suitable for UI display."""
+    target = branch if ref_range.target == "HEAD" and branch else ref_range.target
+    separator = ".." if ref_range.explicit else "..."
+    return f"{ref_range.base}{separator}{target}"
+
+
+def diff_ref(ref_range: ReviewRange) -> str:
+    """Return the git diff revision argument."""
+    separator = ".." if ref_range.explicit else "..."
+    return f"{ref_range.base}{separator}{ref_range.target}"
+
+
+def state_key(scope: StateScope) -> str:
+    """Return the filesystem state key for a review range."""
+    if isinstance(scope, str):
+        return f"{safe_name(scope)}...{safe_name(branch_name())}"
+    if not scope.explicit and scope.target == "HEAD":
+        return f"{safe_name(scope.base)}...{safe_name(branch_name())}"
+    return safe_name(range_label(scope))
+
+
 def verify_base(base: str) -> None:
     """Fail if the base ref does not exist."""
     git(["rev-parse", "--verify", "--quiet", base])
+
+
+def verify_range(ref_range: ReviewRange) -> None:
+    """Fail if the review range refs do not exist."""
+    verify_base(ref_range.base)
+    verify_base(ref_range.target)
 
 
 def safe_name(value: str) -> str:
@@ -321,47 +528,96 @@ def safe_name(value: str) -> str:
     return "".join(character if character.isalnum() else "-" for character in value)
 
 
-def review_root(base: str) -> Path:
+def review_root(scope: StateScope) -> Path:
     """Return the private state directory for this branch review."""
-    return git_dir() / "review" / f"{safe_name(base)}...{safe_name(branch_name())}"
+    return git_dir() / "review" / state_key(scope)
 
 
-def state_file(base: str) -> Path:
+def state_file(scope: StateScope) -> Path:
     """Return the JSON state file for this branch review."""
-    return review_root(base) / "state.json"
+    return review_root(scope) / "state.json"
 
 
-def load_state(base: str) -> dict[str, Any]:
+def load_state(scope: StateScope) -> dict[str, Any]:
     """Load review state."""
-    path = state_file(base)
+    path = state_file(scope)
     if not path.exists():
         return {"reviewed": []}
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def save_state(base: str, state: dict[str, Any]) -> None:
+def save_state(scope: StateScope, state: dict[str, Any]) -> None:
     """Save review state."""
-    path = state_file(base)
+    path = state_file(scope)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(state, handle, indent=2, sort_keys=True)
         handle.write("\n")
 
 
-def changed_files(base: str) -> list[ChangedFile]:
-    """Return files changed between base and HEAD."""
+def has_glob(pattern: str) -> bool:
+    """Return whether a pattern contains shell-style glob tokens."""
+    return any(character in pattern for character in "*?[")
+
+
+def matches_ignore_pattern(path: str, pattern: str) -> bool:
+    """Return whether a git path matches one ignore pattern."""
+    normalized_pattern = pattern.strip()
+    if not normalized_pattern:
+        return False
+    normalized_path = path.strip("/")
+    normalized_pattern = normalized_pattern.strip("/")
+
+    if not normalized_pattern:
+        return False
+    if has_glob(normalized_pattern):
+        return fnmatch.fnmatchcase(normalized_path, normalized_pattern) or fnmatch.fnmatchcase(
+            Path(normalized_path).name,
+            normalized_pattern,
+        )
+    return normalized_path == normalized_pattern or normalized_path.startswith(f"{normalized_pattern}/")
+
+
+def ignored_path(path: str, patterns: Sequence[str]) -> bool:
+    """Return whether a git path should be hidden by ignore patterns."""
+    return any(matches_ignore_pattern(path, pattern) for pattern in patterns)
+
+
+def changed_files(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> list[ChangedFile]:
+    """Return files changed in the review range."""
     output = subprocess.check_output(
-        ["git", "diff", "--name-only", "-z", f"{base}...HEAD"],
+        ["git", "diff", "--name-only", "-z", diff_ref(ref_range)],
         stderr=subprocess.PIPE,
     )
     paths = [path.decode() for path in output.split(b"\0") if path]
-    return [ChangedFile(index=index, path=path) for index, path in enumerate(paths, 1)]
+    visible_paths = [path for path in paths if not ignored_path(path, ignore_patterns)]
+    return [ChangedFile(index=index, path=path) for index, path in enumerate(visible_paths, 1)]
+
+
+def renumber_files(files: Sequence[ChangedFile]) -> list[ChangedFile]:
+    """Return changed files with consecutive display indexes."""
+    return [ChangedFile(index=index, path=changed_file.path) for index, changed_file in enumerate(files, 1)]
 
 
 def reviewed_paths(state: dict[str, Any]) -> set[str]:
     """Return reviewed file paths from state."""
     return set(state.get("reviewed", []))
+
+
+def ignored_file_paths(state: dict[str, Any]) -> set[str]:
+    """Return ignored file paths from state."""
+    return set(state.get("ignored", []))
+
+
+def reviewable_files(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> list[ChangedFile]:
+    """Return changed files that are not marked ignored."""
+    ignored = ignored_file_paths(load_state(ref_range))
+    return renumber_files(
+        changed_file
+        for changed_file in changed_files(ref_range, ignore_patterns)
+        if changed_file.path not in ignored
+    )
 
 
 def published_comment_ids(state: dict[str, Any]) -> set[str]:
@@ -422,14 +678,14 @@ def reply_draft_state(draft: ReplyDraft) -> dict[str, Any]:
     }
 
 
-def save_reply_drafts(base: str, drafts: Sequence[ReplyDraft]) -> None:
+def save_reply_drafts(scope: StateScope, drafts: Sequence[ReplyDraft]) -> None:
     """Persist reply drafts in review state."""
-    state = load_state(base)
+    state = load_state(scope)
     state["reply_drafts"] = [reply_draft_state(draft) for draft in drafts]
-    save_state(base, state)
+    save_state(scope, state)
 
 
-def add_reply_draft(base: str, target: ReplyTarget, body: str) -> ReplyDraft:
+def add_reply_draft(scope: StateScope, target: ReplyTarget, body: str) -> ReplyDraft:
     """Add a reply draft for a remote review note."""
     draft = ReplyDraft(
         draft_id="",
@@ -449,14 +705,14 @@ def add_reply_draft(base: str, target: ReplyTarget, body: str) -> ReplyDraft:
     )
     existing_drafts = [
         existing_draft
-        for existing_draft in reply_drafts(load_state(base))
+        for existing_draft in reply_drafts(load_state(scope))
         if existing_draft.draft_id != saved_draft.draft_id
     ]
-    save_reply_drafts(base, [*existing_drafts, saved_draft])
+    save_reply_drafts(scope, [*existing_drafts, saved_draft])
     return saved_draft
 
 
-def update_reply_draft_body(base: str, draft: ReplyDraft, body: str) -> ReplyDraft:
+def update_reply_draft_body(scope: StateScope, draft: ReplyDraft, body: str) -> ReplyDraft:
     """Replace an existing reply draft body and persist it."""
     draft_id = draft.draft_id or reply_draft_id(draft)
     updated = ReplyDraft(
@@ -469,7 +725,7 @@ def update_reply_draft_body(base: str, draft: ReplyDraft, body: str) -> ReplyDra
     )
     replaced = False
     updated_drafts: list[ReplyDraft] = []
-    for existing_draft in reply_drafts(load_state(base)):
+    for existing_draft in reply_drafts(load_state(scope)):
         if existing_draft.draft_id == draft_id:
             updated_drafts.append(updated)
             replaced = True
@@ -477,15 +733,15 @@ def update_reply_draft_body(base: str, draft: ReplyDraft, body: str) -> ReplyDra
             updated_drafts.append(existing_draft)
     if not replaced:
         updated_drafts.append(updated)
-    save_reply_drafts(base, updated_drafts)
+    save_reply_drafts(scope, updated_drafts)
     return updated
 
 
-def remove_reply_drafts(base: str, draft_ids: set[str]) -> int:
+def remove_reply_drafts(scope: StateScope, draft_ids: set[str]) -> int:
     """Remove reply drafts by ID and return the number removed."""
-    drafts = reply_drafts(load_state(base))
+    drafts = reply_drafts(load_state(scope))
     kept = [draft for draft in drafts if draft.draft_id not in draft_ids]
-    save_reply_drafts(base, kept)
+    save_reply_drafts(scope, kept)
     return len(drafts) - len(kept)
 
 
@@ -579,18 +835,18 @@ def suggestion_undo_state(undo: SuggestionUndo) -> dict[str, Any]:
     }
 
 
-def save_suggestion_undo(base: str, undo: SuggestionUndo) -> None:
+def save_suggestion_undo(scope: StateScope, undo: SuggestionUndo) -> None:
     """Persist the last suggestion undo snapshot."""
-    state = load_state(base)
+    state = load_state(scope)
     state["suggestion_undo"] = suggestion_undo_state(undo)
-    save_state(base, state)
+    save_state(scope, state)
 
 
-def clear_suggestion_undo(base: str) -> None:
+def clear_suggestion_undo(scope: StateScope) -> None:
     """Clear the stored suggestion undo snapshot."""
-    state = load_state(base)
+    state = load_state(scope)
     state.pop("suggestion_undo", None)
-    save_state(base, state)
+    save_state(scope, state)
 
 
 def comment_id(comment: ReviewComment) -> str:
@@ -604,12 +860,12 @@ def comment_id(comment: ReviewComment) -> str:
     return hashlib.sha1(encoded).hexdigest()
 
 
-def mark_comment_published(base: str, state: dict[str, Any], comment: ReviewComment) -> None:
+def mark_comment_published(scope: StateScope, state: dict[str, Any], comment: ReviewComment) -> None:
     """Persist that a review comment has been published."""
     published = published_comment_ids(state)
     published.add(comment_id(comment))
     state["published"] = sorted(published)
-    save_state(base, state)
+    save_state(scope, state)
 
 
 def is_reviewed(path: str, state: dict[str, Any]) -> bool:
@@ -617,16 +873,36 @@ def is_reviewed(path: str, state: dict[str, Any]) -> bool:
     return path in reviewed_paths(state)
 
 
-def toggle_reviewed(base: str, path: str) -> None:
+def is_ignored(path: str, state: dict[str, Any]) -> bool:
+    """Return whether a file is marked ignored."""
+    return path in ignored_file_paths(state)
+
+
+def toggle_reviewed(scope: StateScope, path: str) -> None:
     """Toggle the reviewed checkbox for a file."""
-    state = load_state(base)
+    state = load_state(scope)
     reviewed = reviewed_paths(state)
     if path in reviewed:
         reviewed.remove(path)
     else:
         reviewed.add(path)
     state["reviewed"] = sorted(reviewed)
-    save_state(base, state)
+    save_state(scope, state)
+
+
+def toggle_ignored(scope: StateScope, path: str) -> bool:
+    """Toggle the ignored flag for a file and return its new state."""
+    state = load_state(scope)
+    ignored = ignored_file_paths(state)
+    if path in ignored:
+        ignored.remove(path)
+        is_now_ignored = False
+    else:
+        ignored.add(path)
+        is_now_ignored = True
+    state["ignored"] = sorted(ignored)
+    save_state(scope, state)
+    return is_now_ignored
 
 
 def marker_only(line: str) -> bool:
@@ -742,9 +1018,9 @@ def remove_published_markers(comments: Sequence[ReviewComment]) -> int:
     return sum(remove_published_markers_from_file(path, ids) for path, ids in ids_by_path.items())
 
 
-def changed_new_lines(base: str, path: str) -> set[int]:
-    """Return new-side line numbers touched by the branch diff."""
-    diff = git(["diff", "--unified=0", f"{base}...HEAD", "--", path])
+def changed_new_lines(ref_range: ReviewRange, path: str) -> set[int]:
+    """Return new-side line numbers touched by the review range."""
+    diff = git(["diff", "--unified=0", diff_ref(ref_range), "--", path])
     lines: set[int] = set()
     for line in diff.splitlines():
         if not line.startswith("@@"):
@@ -758,26 +1034,44 @@ def changed_new_lines(base: str, path: str) -> set[int]:
     return lines
 
 
-def changed_lines_by_path(base: str, paths: set[str]) -> dict[str, set[int]]:
+def changed_lines_by_path(ref_range: ReviewRange, paths: set[str]) -> dict[str, set[int]]:
     """Return changed new-side line numbers keyed by file path."""
-    return {path: changed_new_lines(base, path) for path in paths}
+    return {path: changed_new_lines(ref_range, path) for path in paths}
 
 
-def print_status(base: str) -> None:
+def print_status(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> None:
     """Print the changed-file checklist and local comments."""
-    files = changed_files(base)
-    state = load_state(base)
+    files = changed_files(ref_range, ignore_patterns)
+    state = load_state(ref_range)
     file_comments = comments_by_path(files)
 
     if not files:
-        print(f"No files changed against {base}.")
+        print(f"No files changed in {range_label(ref_range)}.")
         return
 
     for changed_file in files:
         checked = "x" if is_reviewed(changed_file.path, state) else " "
+        ignored = "i" if is_ignored(changed_file.path, state) else " "
         count = len(file_comments.get(changed_file.path, []))
         suffix = f" ({count} comment{'s' if count != 1 else ''})" if count else ""
-        print(f"{changed_file.index:>3}. [{checked}] {changed_file.path}{suffix}")
+        print(f"{changed_file.index:>3}. [{checked}][{ignored}] {changed_file.path}{suffix}")
+
+
+def checked_files(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> list[ChangedFile]:
+    """Return changed files marked reviewed in state."""
+    files = reviewable_files(ref_range, ignore_patterns)
+    reviewed = reviewed_paths(load_state(ref_range))
+    return [changed_file for changed_file in files if changed_file.path in reviewed]
+
+
+def print_checked(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> None:
+    """Print changed files marked reviewed."""
+    files = checked_files(ref_range, ignore_patterns)
+    if not files:
+        print(f"No checked files in {range_label(ref_range)}.")
+        return
+    for changed_file in files:
+        print(changed_file.path)
 
 
 def delta_command(width: int | None = None, *, paging: str = "always") -> list[str]:
@@ -801,24 +1095,24 @@ def delta_command(width: int | None = None, *, paging: str = "always") -> list[s
     return command
 
 
-def diff_command(base: str, path: str, branch: str | None = None) -> list[str]:
+def diff_command(ref_range: ReviewRange, path: str, branch: str | None = None) -> list[str]:
     """Return the git diff command for one file."""
-    target_branch = branch or branch_name()
+    target = branch if ref_range.target == "HEAD" and branch else ref_range.target
     return [
         "git",
         "diff",
         "--no-ext-diff",
-        f"--src-prefix={base}/",
-        f"--dst-prefix={target_branch}/",
-        f"{base}...HEAD",
+        f"--src-prefix={ref_range.base}/",
+        f"--dst-prefix={target}/",
+        diff_ref(ref_range),
         "--",
         path,
     ]
 
 
-def show_diff(base: str, path: str, branch: str | None = None) -> None:
+def show_diff(ref_range: ReviewRange, path: str, branch: str | None = None) -> None:
     """Show a side-by-side diff for one file in the pager."""
-    git_command = diff_command(base, path, branch)
+    git_command = diff_command(ref_range, path, branch)
     delta_process = None
     git_process = subprocess.Popen(git_command, stdout=subprocess.PIPE)
     try:
@@ -831,16 +1125,17 @@ def show_diff(base: str, path: str, branch: str | None = None) -> None:
     git_process.wait()
 
 
-def fast_preview_command(base: str, branch: str) -> str:
+def fast_preview_command(ref_range: ReviewRange, branch: str) -> str:
     """Return the shell preview command used by fzf fast mode."""
+    target = branch if ref_range.target == "HEAD" else ref_range.target
     git_command = [
         "git",
         "diff",
         "--no-ext-diff",
         "--color=always",
-        f"--src-prefix={base}/",
-        f"--dst-prefix={branch}/",
-        f"{base}...HEAD",
+        f"--src-prefix={ref_range.base}/",
+        f"--dst-prefix={target}/",
+        diff_ref(ref_range),
         "--",
         "{}",
     ]
@@ -850,7 +1145,7 @@ def fast_preview_command(base: str, branch: str) -> str:
     return f"if command -v delta >/dev/null 2>&1; then {git_part} | {delta_part}; else {git_part}; fi"
 
 
-def fast_select_file(base: str, files: Sequence[ChangedFile]) -> str | None:
+def fast_select_file(ref_range: ReviewRange, files: Sequence[ChangedFile]) -> str | None:
     """Select a changed file with fzf and an inline diff preview."""
     command = [
         "fzf",
@@ -861,7 +1156,7 @@ def fast_select_file(base: str, files: Sequence[ChangedFile]) -> str | None:
         "--prompt=review fast> ",
         "--preview-window=up,70%,border-bottom",
         "--preview",
-        fast_preview_command(base, branch_name()),
+        fast_preview_command(ref_range, branch_name()),
     ]
     try:
         result = subprocess.run(
@@ -879,20 +1174,20 @@ def fast_select_file(base: str, files: Sequence[ChangedFile]) -> str | None:
     return selected or None
 
 
-def fast_review(base: str) -> None:
+def fast_review(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> None:
     """Run the lightweight fzf/delta review flow."""
-    files = changed_files(base)
+    files = reviewable_files(ref_range, ignore_patterns)
     if not files:
-        print(f"No files changed against {base}.")
+        print(f"No files changed in {range_label(ref_range)}.")
         return
-    selected = fast_select_file(base, files)
+    selected = fast_select_file(ref_range, files)
     if selected is not None:
-        show_diff(base, selected, branch_name())
+        show_diff(ref_range, selected, branch_name())
 
 
-def side_by_side_diff_lines(base: str, path: str, width: int, branch: str | None = None) -> list[str]:
+def side_by_side_diff_lines(ref_range: ReviewRange, path: str, width: int, branch: str | None = None) -> list[str]:
     """Return side-by-side diff lines with ANSI colors preserved."""
-    git_command = diff_command(base, path, branch)
+    git_command = diff_command(ref_range, path, branch)
     git_process = subprocess.Popen(git_command, stdout=subprocess.PIPE)
     try:
         output = subprocess.check_output(
@@ -902,7 +1197,7 @@ def side_by_side_diff_lines(base: str, path: str, width: int, branch: str | None
             text=True,
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
-        output = run(["git", "diff", "--no-color", f"{base}...HEAD", "--", path])
+        output = run(["git", "diff", "--no-color", diff_ref(ref_range), "--", path])
     finally:
         if git_process.stdout is not None:
             git_process.stdout.close()
@@ -910,6 +1205,15 @@ def side_by_side_diff_lines(base: str, path: str, width: int, branch: str | None
 
     lines = [line.replace("\t", "    ") for line in output.splitlines()]
     return lines or ["No diff for this file."]
+
+
+def rendered_new_line_matches(line: str, line_number: int) -> bool:
+    """Return whether a rendered diff row belongs to the new-side line number."""
+    text = ANSI_RE.sub("", line)
+    parts = text.split("│", 4)
+    if len(parts) >= 5:
+        return parts[3].strip() == str(line_number)
+    return re.search(rf"(?<!\d){line_number}(?!\d)", text) is not None
 
 
 def file_newline(text: str) -> str:
@@ -976,13 +1280,13 @@ def apply_suggestion_to_file(suggestion: ReviewSuggestion) -> tuple[bool, str]:
     return True, f"Applied suggestion to {suggestion.path}:{suggestion.start_line}-{suggestion.end_line}."
 
 
-def restore_suggestion_undo(base: str) -> tuple[bool, str]:
+def restore_suggestion_undo(scope: StateScope) -> tuple[bool, str]:
     """Restore the last applied suggestion snapshot."""
-    undo = suggestion_undo(load_state(base))
+    undo = suggestion_undo(load_state(scope))
     if undo is None:
         return False, "No applied suggestion to undo."
     Path(undo.path).write_text(undo.content, encoding="utf-8")
-    clear_suggestion_undo(base)
+    clear_suggestion_undo(scope)
     return True, f"Undid suggestion for {undo.path}:{undo.start_line}-{undo.end_line}."
 
 
@@ -1034,16 +1338,16 @@ def resolve_path(files: Sequence[ChangedFile], value: str) -> str:
     die(f"not a changed file: {value}")
 
 
-def list_comments(base: str) -> None:
+def list_comments(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> None:
     """Print local review comments."""
-    files = changed_files(base)
+    files = reviewable_files(ref_range, ignore_patterns)
     comments = collect_comments(files)
     if not comments:
         print("No #review comments found.")
         return
 
     for comment in comments:
-        changed_lines = changed_new_lines(base, comment.path)
+        changed_lines = changed_new_lines(ref_range, comment.path)
         marker = "" if comment.target_line in changed_lines else " [not in diff]"
         print(f"{comment.path}:{comment.target_line}{marker}: {comment.body}")
 
@@ -1083,6 +1387,197 @@ def open_review_request(provider: str) -> bool:
         success, _ = try_run(["gh", "pr", "view", "--web"])
         return success
     die(f"unsupported provider: {provider}")
+
+
+def open_url(url: str) -> bool:
+    """Open a URL in the system browser."""
+    success, _ = try_run(["open", url])
+    return success
+
+
+def jira_ssl_context(config: JiraConfig) -> ssl.SSLContext:
+    """Return an SSL context for Jira API calls."""
+    return ssl.create_default_context(cafile=config.ca_file) if config.ca_file else ssl.create_default_context()
+
+
+def jira_auth_headers(config: JiraConfig) -> list[dict[str, str]]:
+    """Return Jira Authorization header candidates."""
+    if not config.token:
+        return [{}]
+    headers = [{"Authorization": f"Bearer {config.token}"}]
+    if config.user:
+        encoded = base64.b64encode(f"{config.user}:{config.token}".encode()).decode()
+        headers.append({"Authorization": f"Basic {encoded}"})
+    return headers
+
+
+def jira_error_message(error: HTTPError) -> str:
+    """Return a concise Jira HTTP error message."""
+    detail = ""
+    try:
+        detail = error.read().decode().strip()
+    except Exception:
+        detail = ""
+    suffix = f": {detail[:300]}" if detail else ""
+    return f"Jira API returned HTTP {error.code}{suffix}"
+
+
+def jira_request(
+    config: JiraConfig,
+    method: str,
+    path: str,
+    *,
+    query: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run one Jira REST API request."""
+    if not config.base_url:
+        raise RuntimeError(f"Set JIRA_URL in {work_config_path()}")
+    query_string = f"?{urlencode(query)}" if query else ""
+    url = f"{config.base_url}{path}{query_string}"
+    body = json.dumps(payload).encode() if payload is not None else None
+    last_error = ""
+    for headers in jira_auth_headers(config):
+        request = Request(url, data=body, method=method)
+        request.add_header("Accept", "application/json")
+        if payload is not None:
+            request.add_header("Content-Type", "application/json")
+        for key, value in headers.items():
+            request.add_header(key, value)
+        try:
+            with urlopen(request, context=jira_ssl_context(config)) as response:
+                raw_body = response.read().decode().strip()
+                return json.loads(raw_body) if raw_body else {}
+        except HTTPError as error:
+            last_error = jira_error_message(error)
+            if error.code not in (401, 403) or "Basic " in headers.get("Authorization", ""):
+                break
+        except URLError as error:
+            raise RuntimeError(f"Could not reach Jira API: {error.reason}") from error
+    raise RuntimeError(last_error or "Jira API request failed.")
+
+
+def jira_display_name(value: dict[str, Any] | None) -> str:
+    """Return a display name from a Jira user object."""
+    if not value:
+        return "unassigned"
+    return str(value.get("displayName") or value.get("name") or value.get("emailAddress") or "unknown")
+
+
+def jira_named_value(value: dict[str, Any] | None) -> str:
+    """Return the name field from a Jira value object."""
+    if not value:
+        return ""
+    return str(value.get("name") or value.get("value") or "")
+
+
+def jira_named_values(values: Sequence[Any]) -> tuple[str, ...]:
+    """Return display names for Jira list field values."""
+    names: list[str] = []
+    for value in values:
+        if isinstance(value, dict):
+            name = jira_named_value(value)
+        else:
+            name = str(value)
+        if name:
+            names.append(name)
+    return tuple(names)
+
+
+def jira_text(value: Any) -> str:
+    """Return readable text from Jira plain text or document values."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(part for part in (jira_text(item) for item in value) if part)
+    if isinstance(value, dict):
+        if isinstance(value.get("text"), str):
+            return value["text"]
+        return jira_text(value.get("content", []))
+    return str(value)
+
+
+def jira_comment_from_json(data: dict[str, Any]) -> JiraComment:
+    """Return a Jira comment parsed from API JSON."""
+    return JiraComment(
+        author=jira_display_name(data.get("author")),
+        body=jira_text(data.get("body")),
+        created=str(data.get("created") or ""),
+        updated=str(data.get("updated") or ""),
+    )
+
+
+def jira_issue_from_json(config: JiraConfig, data: dict[str, Any], comments: Sequence[JiraComment]) -> JiraIssue:
+    """Return a Jira issue parsed from API JSON."""
+    fields = data.get("fields") or {}
+    return JiraIssue(
+        key=str(data.get("key") or ""),
+        url=f"{config.base_url}/browse/{data.get('key')}",
+        summary=str(fields.get("summary") or ""),
+        status=jira_named_value(fields.get("status")),
+        issue_type=jira_named_value(fields.get("issuetype")),
+        priority=jira_named_value(fields.get("priority")) or "none",
+        assignee=jira_display_name(fields.get("assignee")),
+        reporter=jira_display_name(fields.get("reporter")),
+        resolution=jira_named_value(fields.get("resolution")) or "unresolved",
+        labels=tuple(str(label) for label in fields.get("labels") or ()),
+        components=jira_named_values(fields.get("components") or ()),
+        fix_versions=jira_named_values(fields.get("fixVersions") or ()),
+        created=str(fields.get("created") or ""),
+        updated=str(fields.get("updated") or ""),
+        description=jira_text(fields.get("description")),
+        comments=tuple(comments),
+    )
+
+
+def fetch_jira_comments(config: JiraConfig, key: str) -> list[JiraComment]:
+    """Fetch all comments for a Jira issue."""
+    comments: list[JiraComment] = []
+    start_at = 0
+    while True:
+        page = jira_request(
+            config,
+            "GET",
+            f"/rest/api/2/issue/{quote(key)}/comment",
+            query={"startAt": str(start_at), "maxResults": "100", "orderBy": "created"},
+        )
+        raw_comments = page.get("comments") or page.get("values") or []
+        comments.extend(jira_comment_from_json(comment) for comment in raw_comments if isinstance(comment, dict))
+        total = int(page.get("total", len(comments)))
+        if not raw_comments or len(comments) >= total:
+            return comments
+        start_at += len(raw_comments)
+
+
+def fetch_jira_issue(config: JiraConfig, key: str) -> JiraIssue:
+    """Fetch a Jira issue and its comments."""
+    fields = ",".join(
+        (
+            "summary",
+            "status",
+            "issuetype",
+            "priority",
+            "assignee",
+            "reporter",
+            "resolution",
+            "labels",
+            "components",
+            "fixVersions",
+            "created",
+            "updated",
+            "description",
+        )
+    )
+    issue = jira_request(config, "GET", f"/rest/api/2/issue/{quote(key)}", query={"fields": fields})
+    return jira_issue_from_json(config, issue, fetch_jira_comments(config, key))
+
+
+def post_jira_comment(config: JiraConfig, key: str, body: str) -> JiraComment:
+    """Post a comment to a Jira issue."""
+    data = jira_request(config, "POST", f"/rest/api/2/issue/{quote(key)}/comment", payload={"body": body})
+    return jira_comment_from_json(data)
 
 
 def gitlab_project_path() -> str:
@@ -1645,15 +2140,22 @@ def publish_github_comment(
     print(f"posted github fallback {comment.path}:{comment.target_line}")
 
 
-def publish_comments(base: str, provider: str, dry_run: bool, *, force: bool = False) -> list[ReviewComment]:
+def publish_comments(
+    ref_range: ReviewRange,
+    provider: str,
+    dry_run: bool,
+    *,
+    force: bool = False,
+    ignore_patterns: Sequence[str] = (),
+) -> list[ReviewComment]:
     """Publish local review comments to a provider."""
-    files = changed_files(base)
+    files = reviewable_files(ref_range, ignore_patterns)
     all_comments = collect_comments(files)
     if not all_comments:
         print("No #review comments found.")
         return []
 
-    state = load_state(base)
+    state = load_state(ref_range)
     published = published_comment_ids(state)
     comments = all_comments if force else [comment for comment in all_comments if comment_id(comment) not in published]
     skipped = len(all_comments) - len(comments)
@@ -1663,7 +2165,7 @@ def publish_comments(base: str, provider: str, dry_run: bool, *, force: bool = F
         print("No unpublished #review comments found.")
         return []
 
-    lines_by_path = changed_lines_by_path(base, {comment.path for comment in comments})
+    lines_by_path = changed_lines_by_path(ref_range, {comment.path for comment in comments})
     bad_comments = [comment for comment in comments if comment.target_line not in lines_by_path[comment.path]]
     if bad_comments:
         print("These comments do not point at changed lines; they will use fallback comments:")
@@ -1688,7 +2190,7 @@ def publish_comments(base: str, provider: str, dry_run: bool, *, force: bool = F
                 version,
                 positioned=comment.target_line in lines_by_path[comment.path],
             )
-            mark_comment_published(base, state, comment)
+            mark_comment_published(ref_range, state, comment)
             published_comments.append(comment)
     elif provider == "github":
         repo = github_repo()
@@ -1703,7 +2205,7 @@ def publish_comments(base: str, provider: str, dry_run: bool, *, force: bool = F
                 commit_id,
                 positioned=comment.target_line in lines_by_path[comment.path],
             )
-            mark_comment_published(base, state, comment)
+            mark_comment_published(ref_range, state, comment)
             published_comments.append(comment)
     else:
         die(f"unsupported provider: {provider}")
@@ -1970,6 +2472,139 @@ def append_wrapped_popup_text(
         lines.append((f"{prefix}{wrapped}", mode))
 
 
+def append_jira_field(lines: list[tuple[str, int]], width: int, label: str, value: str) -> None:
+    """Append one Jira metadata field to popup lines."""
+    mode = color_pair(theme_color("foreground"))
+    text = f"{label}: {value or '-'}"
+    for wrapped in wrap_text(text, width):
+        lines.append((wrapped, mode))
+
+
+def jira_issue_popup_lines(issue: JiraIssue, width: int) -> list[tuple[str, int]]:
+    """Return styled popup lines for a Jira issue."""
+    lines: list[tuple[str, int]] = []
+    heading = f"{issue.key}  {issue.summary}"
+    lines.append((heading, curses.A_BOLD | color_pair(theme_color("cyan"))))
+    append_jira_field(lines, width, "Status", issue.status)
+    append_jira_field(lines, width, "Type", issue.issue_type)
+    append_jira_field(lines, width, "Priority", issue.priority)
+    append_jira_field(lines, width, "Assignee", issue.assignee)
+    append_jira_field(lines, width, "Reporter", issue.reporter)
+    append_jira_field(lines, width, "Resolution", issue.resolution)
+    append_jira_field(lines, width, "Labels", ", ".join(issue.labels))
+    append_jira_field(lines, width, "Components", ", ".join(issue.components))
+    append_jira_field(lines, width, "Fix versions", ", ".join(issue.fix_versions))
+    append_jira_field(lines, width, "Created", short_timestamp(issue.created))
+    append_jira_field(lines, width, "Updated", short_timestamp(issue.updated))
+    append_jira_field(lines, width, "URL", issue.url)
+    lines.append(("", 0))
+
+    lines.append(("Description", curses.A_BOLD | color_pair(theme_color("purple"))))
+    append_wrapped_popup_text(
+        lines,
+        issue.description or "No description.",
+        width,
+        2,
+        color_pair(theme_color("foreground")),
+    )
+    lines.append(("", 0))
+
+    lines.append((f"Comments ({len(issue.comments)})", curses.A_BOLD | color_pair(theme_color("purple"))))
+    if not issue.comments:
+        lines.append(("  No comments.", color_pair(theme_color("comment"))))
+    for comment in issue.comments:
+        timestamp = short_timestamp(comment.created)
+        suffix = f"  {timestamp}" if timestamp else ""
+        lines.append((f"  @{comment.author}{suffix}", curses.A_BOLD | color_pair(theme_color("green"))))
+        append_wrapped_popup_text(lines, comment.body or "-", width, 4, color_pair(theme_color("foreground")))
+        lines.append(("", 0))
+    return lines
+
+
+def append_help_section(lines: list[tuple[str, int]], width: int, title: str, entries: Sequence[tuple[str, str]]) -> None:
+    """Append one help section to popup lines."""
+    lines.append((title, curses.A_BOLD | color_pair(theme_color("purple"))))
+    for key, description in entries:
+        text = f"{key:<12} {description}"
+        for wrapped in wrap_text(text, width):
+            lines.append((wrapped, color_pair(theme_color("foreground"))))
+    lines.append(("", 0))
+
+
+def help_popup_lines(width: int) -> list[tuple[str, int]]:
+    """Return in-app help popup lines."""
+    lines: list[tuple[str, int]] = []
+    append_help_section(
+        lines,
+        width,
+        "Main",
+        (
+            ("?", "show this help"),
+            ("/", "start regex file search"),
+            ("Esc/Enter", "leave search mode"),
+            ("j/k", "move file selection"),
+            ("J/K", "scroll the diff"),
+            ("Space", "toggle reviewed checkbox"),
+            ("i", "toggle ignored flag"),
+            ("f", "cycle all/unchecked/checked/ignored filters"),
+            ("n/N", "jump next/previous unreviewed file"),
+            ("c/e", "open selected file in editor"),
+            ("d", "open selected diff in pager"),
+            ("m", "open comments popup"),
+            ("t", "open Jira ticket popup"),
+            ("o", "open merge request or pull request in browser"),
+            ("R", "refresh remote review comments"),
+            ("p", "publish local #review markers"),
+            ("r", "reload files and local comments"),
+            ("q", "quit"),
+        ),
+    )
+    append_help_section(
+        lines,
+        width,
+        "Comments Popup",
+        (
+            ("j/k", "select comments, replies, drafts, and suggestions"),
+            ("J/K", "page through long conversations"),
+            ("a", "add a reply draft, or edit selected draft"),
+            ("r", "reply immediately to selected remote comment"),
+            ("P", "publish selected draft, or all drafts for the file"),
+            ("x", "delete selected draft"),
+            ("A", "apply selected suggestion to the working tree"),
+            ("u", "undo the last applied suggestion"),
+            ("s", "toggle GitLab thread resolved state"),
+            ("y", "copy selected body to clipboard"),
+            ("g", "jump main diff to selected line"),
+            ("q/Esc", "close popup"),
+        ),
+    )
+    append_help_section(
+        lines,
+        width,
+        "Jira Popup",
+        (
+            ("a", "add a Jira comment"),
+            ("R", "refresh ticket data"),
+            ("o", "open ticket in browser"),
+            ("j/k", "scroll ticket data"),
+            ("J/K", "page through ticket data"),
+            ("q/Esc", "close popup"),
+        ),
+    )
+    append_help_section(
+        lines,
+        width,
+        "Config",
+        (
+            ("Jira", "uses JIRA_KEY or a key in the branch name"),
+            ("Jira URL", "reads JIRA_URL from WORK_CONFIG or ~/.work/work.zsh"),
+            ("Editor", "uses VISUAL, then EDITOR, then nvim"),
+            ("Theme", "uses review_THEME, default dracula"),
+        ),
+    )
+    return lines
+
+
 def scroll_for_selected_block(scroll: int, content_height: int, block_start: int, block_end: int) -> int:
     """Return popup scroll adjusted to show the selected block when it fits."""
     block_height = block_end - block_start + 1
@@ -2061,14 +2696,21 @@ def confirm_publish(window: curses.window, provider: str) -> bool | None:
 class ReviewApp:
     """Full-screen review terminal UI."""
 
-    def __init__(self, screen: curses.window, base: str) -> None:
+    def __init__(
+        self,
+        screen: curses.window,
+        ref_range: ReviewRange,
+        ignore_patterns: Sequence[str] = (),
+    ) -> None:
         """Create the TUI app."""
         self.screen = screen
-        self.base = base
+        self.ref_range = ref_range
+        self.ignore_patterns = tuple(ignore_patterns)
         self.branch = branch_name()
         self.files: list[ChangedFile] = []
         self.state: dict[str, Any] = {}
         self.reviewed: set[str] = set()
+        self.ignored: set[str] = set()
         self.comments_by_path: dict[str, list[ReviewComment]] = {}
         self.remote_threads_by_path: dict[str, list[RemoteThread]] = {}
         self.selected = 0
@@ -2094,9 +2736,19 @@ class ReviewApp:
         """Return changed files matching the active regex search."""
         files = self.files
         if self.file_filter == "checked":
-            files = [changed_file for changed_file in files if changed_file.path in self.reviewed]
+            files = [
+                changed_file
+                for changed_file in files
+                if changed_file.path in self.reviewed and changed_file.path not in self.ignored
+            ]
         elif self.file_filter == "unchecked":
-            files = [changed_file for changed_file in files if changed_file.path not in self.reviewed]
+            files = [
+                changed_file
+                for changed_file in files
+                if changed_file.path not in self.reviewed and changed_file.path not in self.ignored
+            ]
+        elif self.file_filter == "ignored":
+            files = [changed_file for changed_file in files if changed_file.path in self.ignored]
 
         if not self.search_query:
             self.search_error = ""
@@ -2111,9 +2763,10 @@ class ReviewApp:
 
     def reload(self) -> None:
         """Reload files, state, and clear stale diff cache."""
-        self.files = changed_files(self.base)
-        self.state = load_state(self.base)
+        self.files = changed_files(self.ref_range, self.ignore_patterns)
+        self.state = load_state(self.ref_range)
         self.reviewed = reviewed_paths(self.state)
+        self.ignored = ignored_file_paths(self.state)
         self.comments_by_path = comments_by_path(self.files)
         self.selected = max(0, min(self.selected, max(0, len(self.visible_files()) - 1)))
         self.diff_cache.clear()
@@ -2151,10 +2804,16 @@ class ReviewApp:
             self.diff_scroll = max(0, self.diff_scroll - 10)
         elif key == ord(" "):
             self.toggle_current()
+        elif key == ord("i"):
+            self.toggle_ignored_current()
         elif key in {ord("c"), ord("e"), curses.KEY_ENTER, 10, 13}:
             self.edit_current()
         elif key == ord("m"):
             self.show_comments_popup()
+        elif key == ord("t"):
+            self.show_jira_popup()
+        elif key == ord("?"):
+            self.show_help_popup()
         elif key == ord("d"):
             self.open_current_diff()
         elif key == ord("/"):
@@ -2249,7 +2908,7 @@ class ReviewApp:
         total = len(files)
         for offset in range(1, total + 1):
             index = (self.selected + (offset * step)) % total
-            if files[index].path not in self.reviewed:
+            if files[index].path not in self.reviewed and files[index].path not in self.ignored:
                 self.selected = index
                 self.diff_scroll = 0
                 direction = "Next" if step > 0 else "Previous"
@@ -2262,10 +2921,23 @@ class ReviewApp:
         current = self.selected_file()
         if current is None:
             return
-        toggle_reviewed(self.base, current.path)
-        self.state = load_state(self.base)
+        toggle_reviewed(self.ref_range, current.path)
+        self.state = load_state(self.ref_range)
         self.reviewed = reviewed_paths(self.state)
         self.message = f"Toggled {current.path}."
+
+    def toggle_ignored_current(self) -> None:
+        """Toggle ignored state for the selected file."""
+        current = self.selected_file()
+        if current is None:
+            return
+        is_now_ignored = toggle_ignored(self.ref_range, current.path)
+        self.state = load_state(self.ref_range)
+        self.ignored = ignored_file_paths(self.state)
+        self.selected = max(0, min(self.selected, max(0, len(self.visible_files()) - 1)))
+        self.diff_scroll = 0
+        action = "Ignored" if is_now_ignored else "Unignored"
+        self.message = f"{action} {current.path}."
 
     def edit_current(self) -> None:
         """Open the selected file in an editor."""
@@ -2281,7 +2953,7 @@ class ReviewApp:
         current = self.selected_file()
         if current is None:
             return
-        self.suspend(lambda: show_diff(self.base, current.path, self.branch))
+        self.suspend(lambda: show_diff(self.ref_range, current.path, self.branch))
         self.message = f"Viewed diff for {current.path}."
 
     def publish_dry_run(self) -> None:
@@ -2305,7 +2977,12 @@ class ReviewApp:
         failed = False
         with redirect_stdout(output), redirect_stderr(output):
             try:
-                published = publish_comments(self.base, provider, dry_run=dry_run)
+                published = publish_comments(
+                    self.ref_range,
+                    provider,
+                    dry_run=dry_run,
+                    ignore_patterns=self.ignore_patterns,
+                )
                 removed = remove_published_markers(published) if published else 0
                 if published:
                     self.reload()
@@ -2328,6 +3005,9 @@ class ReviewApp:
 
     def open_review_request(self) -> None:
         """Open the detected merge or pull request in the browser."""
+        if not self.files:
+            self.message = f"Open cancelled: no changed files in {range_label(self.ref_range)}."
+            return
         provider = detect_provider()
         if provider is None:
             self.message = "Open cancelled: could not detect GitLab/GitHub remote."
@@ -2336,6 +3016,107 @@ class ReviewApp:
         self.draw()
         opened = open_review_request(provider)
         self.message = f"Opened {provider} review." if opened else f"Could not open {provider} review."
+
+    def load_jira_issue_for_popup(self, config: JiraConfig, key: str) -> tuple[JiraIssue | None, str]:
+        """Load a Jira issue for display in a popup."""
+        try:
+            return fetch_jira_issue(config, key), ""
+        except Exception as error:
+            return None, f"Could not load Jira issue {key}: {error}"
+
+    def add_jira_comment_from_popup(self, config: JiraConfig, issue: JiraIssue) -> tuple[JiraIssue, str]:
+        """Prompt for and post a Jira comment from the ticket popup."""
+        body = prompt(self.screen, "jira comment> ")
+        if body is None:
+            return issue, "Jira comment cancelled."
+        if not body:
+            return issue, "Jira comment cancelled: empty body."
+        try:
+            post_jira_comment(config, issue.key, body)
+            return fetch_jira_issue(config, issue.key), "Jira comment added."
+        except Exception as error:
+            return issue, f"Jira comment failed: {error}"
+
+    def show_jira_popup(self) -> None:
+        """Show the current Jira ticket and allow adding comments."""
+        key = current_jira_issue_key(self.branch)
+        if not key:
+            self.show_text_popup("jira", ["No Jira key found in JIRA_KEY or current branch name."])
+            return
+
+        config = jira_config()
+        if not config.base_url:
+            self.show_text_popup("jira", [f"No Jira URL found. Set JIRA_URL in {work_config_path()}."])
+            return
+
+        issue, status = self.load_jira_issue_for_popup(config, key)
+        if issue is None:
+            self.show_text_popup("jira", [status])
+            return
+
+        self.draw()
+        height, width = self.screen.getmaxyx()
+        popup_height = max(8, min(height - 4, int(height * 0.8)))
+        popup_width = max(50, min(width - 4, int(width * 0.88)))
+        top = max(1, (height - popup_height) // 2)
+        left = max(1, (width - popup_width) // 2)
+        content_width = popup_width - 4
+        content_height = popup_height - 4
+        scroll = 0
+
+        while True:
+            lines = jira_issue_popup_lines(issue, content_width)
+            max_scroll = max(0, len(lines) - content_height)
+            scroll = max(0, min(scroll, max_scroll))
+            popup = curses.newwin(popup_height, popup_width, top, left)
+            popup.keypad(True)
+            popup.erase()
+            popup.box()
+            add_text(popup, 0, 2, f" jira {issue.key} ", popup_width - 4, curses.A_BOLD | color_pair(theme_color("purple")))
+            footer = status or "j/k scroll  J/K page  a comment  R refresh  o open  q/Esc"
+            add_text(
+                popup,
+                popup_height - 2,
+                2,
+                footer.ljust(popup_width - 4),
+                popup_width - 4,
+                color_pair(theme_color("comment")),
+            )
+            for row in range(content_height):
+                index = scroll + row
+                if index >= len(lines):
+                    break
+                text, mode = lines[index]
+                add_text(popup, row + 2, 2, text.ljust(content_width), content_width, mode)
+            popup.refresh()
+
+            key_pressed = popup.getch()
+            if key_pressed in {ord("q"), curses.KEY_ENTER, 10, 13} or is_escape_key(key_pressed):
+                self.draw()
+                return
+            if key_pressed in {ord("j"), curses.KEY_DOWN}:
+                scroll += 1
+                status = ""
+            elif key_pressed in {ord("k"), curses.KEY_UP}:
+                scroll -= 1
+                status = ""
+            elif key_pressed in {ord("J"), curses.KEY_NPAGE}:
+                scroll += content_height
+                status = ""
+            elif key_pressed in {ord("K"), curses.KEY_PPAGE}:
+                scroll -= content_height
+                status = ""
+            elif key_pressed == ord("R"):
+                refreshed_issue, refresh_status = self.load_jira_issue_for_popup(config, issue.key)
+                if refreshed_issue is not None:
+                    issue = refreshed_issue
+                    status = "Jira ticket refreshed."
+                else:
+                    status = refresh_status
+            elif key_pressed == ord("a"):
+                issue, status = self.add_jira_comment_from_popup(config, issue)
+            elif key_pressed == ord("o"):
+                status = "Opened Jira ticket." if open_url(issue.url) else "Could not open Jira ticket."
 
     def load_remote_comments(self, provider: str) -> None:
         """Load remote comments into the TUI cache."""
@@ -2484,8 +3265,8 @@ class ReviewApp:
             return "Draft cancelled."
         if not body:
             return "Draft cancelled: empty body."
-        add_reply_draft(self.base, target, body)
-        self.state = load_state(self.base)
+        add_reply_draft(self.ref_range, target, body)
+        self.state = load_state(self.ref_range)
         return "Draft saved."
 
     def edit_reply_draft(self, draft: ReplyDraft) -> str:
@@ -2497,8 +3278,8 @@ class ReviewApp:
             return "Draft edit cancelled: empty body."
         if body == draft.body:
             return "Draft unchanged."
-        update_reply_draft_body(self.base, draft, body)
-        self.state = load_state(self.base)
+        update_reply_draft_body(self.ref_range, draft, body)
+        self.state = load_state(self.ref_range)
         return "Draft updated."
 
     def remove_latest_reply_draft_for_target(self, target: ReplyTarget) -> str:
@@ -2506,8 +3287,8 @@ class ReviewApp:
         drafts = self.target_reply_drafts(target)
         if not drafts:
             return "No draft for selected comment."
-        removed = remove_reply_drafts(self.base, {drafts[-1].draft_id})
-        self.state = load_state(self.base)
+        removed = remove_reply_drafts(self.ref_range, {drafts[-1].draft_id})
+        self.state = load_state(self.ref_range)
         return f"Removed {removed} draft{'s' if removed != 1 else ''}."
 
     def remove_reply_draft_for_selection(self, selection: CommentPopupSelection) -> str:
@@ -2516,8 +3297,8 @@ class ReviewApp:
             return "Selected row is not a draft."
         if selection.draft is None:
             return self.remove_latest_reply_draft_for_target(selection.target)
-        removed = remove_reply_drafts(self.base, {selection.draft.draft_id})
-        self.state = load_state(self.base)
+        removed = remove_reply_drafts(self.ref_range, {selection.draft.draft_id})
+        self.state = load_state(self.ref_range)
         return f"Removed {removed} draft{'s' if removed != 1 else ''}."
 
     def publish_reply_drafts(self, drafts: Sequence[ReplyDraft]) -> str:
@@ -2553,8 +3334,8 @@ class ReviewApp:
             published_ids.add(draft.draft_id)
 
         if published_ids:
-            remove_reply_drafts(self.base, published_ids)
-            self.state = load_state(self.base)
+            remove_reply_drafts(self.ref_range, published_ids)
+            self.state = load_state(self.ref_range)
             self.try_load_remote_comments(provider)
 
         summary = f"Published {len(published_ids)} draft{'s' if len(published_ids) != 1 else ''}."
@@ -2619,16 +3400,16 @@ class ReviewApp:
             return f"Apply suggestion failed: {undo_error}"
         success, message = apply_suggestion_to_file(suggestion)
         if success:
-            save_suggestion_undo(self.base, undo)
-            self.state = load_state(self.base)
+            save_suggestion_undo(self.ref_range, undo)
+            self.state = load_state(self.ref_range)
             self.diff_cache.clear()
         return message if success else f"Apply suggestion failed: {message}"
 
     def undo_last_suggestion(self) -> str:
         """Undo the last applied suggestion."""
-        success, message = restore_suggestion_undo(self.base)
+        success, message = restore_suggestion_undo(self.ref_range)
         if success:
-            self.state = load_state(self.base)
+            self.state = load_state(self.ref_range)
             self.diff_cache.clear()
         return message if success else f"Undo failed: {message}"
 
@@ -2637,11 +3418,10 @@ class ReviewApp:
         _, width = self.screen.getmaxyx()
         cache_key = (path, width)
         if cache_key not in self.diff_cache:
-            self.diff_cache[cache_key] = side_by_side_diff_lines(self.base, path, width, self.branch)
-        line_pattern = re.compile(rf"(?<!\d){line_number}(?!\d)")
+            self.diff_cache[cache_key] = side_by_side_diff_lines(self.ref_range, path, width, self.branch)
         for index, line in enumerate(self.diff_cache[cache_key]):
-            if line_pattern.search(ANSI_RE.sub("", line)):
-                self.diff_scroll = max(0, index - 2)
+            if rendered_new_line_matches(line, line_number):
+                self.diff_scroll = index
                 return True
         return False
 
@@ -2830,6 +3610,10 @@ class ReviewApp:
 
         self.show_scroll_popup(title, line_factory)
 
+    def show_help_popup(self) -> None:
+        """Show in-app help in a scrollable popup."""
+        self.show_scroll_popup("help", help_popup_lines)
+
     def show_scroll_popup(self, title: str, line_factory: Callable[[int], Sequence[tuple[str, int]]]) -> None:
         """Show styled lines in a scrollable popup."""
         self.draw()
@@ -2933,16 +3717,17 @@ class ReviewApp:
 
     def draw_header(self, width: int) -> None:
         """Draw the app header."""
-        title = f" review  {self.branch} against {self.base} "
+        title = f" review  {display_range_label(self.ref_range, self.branch)} "
         add_text(self.screen, 0, 0, title.ljust(width), width, curses.A_BOLD | color_pair(theme_color("purple")))
 
     def draw_files(self, y: int, x: int, height: int, width: int) -> None:
         """Draw the changed-file checklist pane."""
         files = self.visible_files()
+        ignored_count = len([changed_file for changed_file in self.files if changed_file.path in self.ignored])
         search_label = self.search_query or ""
         search_prefix = "search>" if self.search_active else "search"
         title_prefix = f"Files  filter:{self.file_filter}  {search_prefix} /"
-        title = f"{title_prefix}{search_label}/  {len(files)}/{len(self.files)}"
+        title = f"{title_prefix}{search_label}/  {len(files)}/{len(self.files)}  ignored:{ignored_count}"
         if self.search_error:
             title = f"{title_prefix}{search_label}/  regex error: {self.search_error}"
         add_text(self.screen, y, x, title.ljust(width), width, curses.A_BOLD | color_pair(theme_color("cyan")))
@@ -2963,10 +3748,17 @@ class ReviewApp:
                 continue
             changed_file = files[index]
             checked = "x" if changed_file.path in self.reviewed else " "
+            ignored = "i" if changed_file.path in self.ignored else " "
             count = len(self.comments_by_path.get(changed_file.path, []))
             suffix = f" ({count})" if count else ""
-            label = f"[{checked}] {changed_file.path}{suffix}"
-            color = theme_color("green") if checked == "x" else theme_color("foreground")
+            label = f"[{checked}][{ignored}] {changed_file.path}{suffix}"
+            color = (
+                theme_color("comment")
+                if ignored == "i"
+                else theme_color("green")
+                if checked == "x"
+                else theme_color("foreground")
+            )
             mode = color_pair(color)
             if index == self.selected:
                 mode = curses.A_BOLD | curses.A_UNDERLINE | color_pair(theme_color("purple"))
@@ -2983,7 +3775,7 @@ class ReviewApp:
 
         cache_key = (current.path, width)
         if cache_key not in self.diff_cache:
-            self.diff_cache[cache_key] = side_by_side_diff_lines(self.base, current.path, width, self.branch)
+            self.diff_cache[cache_key] = side_by_side_diff_lines(self.ref_range, current.path, width, self.branch)
         lines = self.diff_cache[cache_key]
         max_scroll = max(0, len(lines) - height + 1)
         self.diff_scroll = max(0, min(self.diff_scroll, max_scroll))
@@ -3031,19 +3823,29 @@ class ReviewApp:
             add_text(self.screen, y + 3, x, f"remote lines: {remote_lines}".ljust(width), width, color_pair(theme_color("green")))
 
 
-def interactive(base: str) -> None:
+def interactive(ref_range: ReviewRange, ignore_patterns: Sequence[str] = ()) -> None:
     """Run the full-screen terminal UI."""
-    curses.wrapper(lambda screen: ReviewApp(screen, base).run())
+    curses.wrapper(lambda screen: ReviewApp(screen, ref_range, ignore_patterns).run())
 
 
 def parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     argument_parser = argparse.ArgumentParser(description="Review branch changes from the terminal.")
     argument_parser.add_argument("--base", help="base branch/ref to compare against")
+    argument_parser.add_argument("--from", dest="from_ref", help="left ref for an explicit two-ref comparison")
+    argument_parser.add_argument("--to", dest="to_ref", help="right ref for an explicit two-ref comparison")
     argument_parser.add_argument("--fast", action="store_true", help="open the lightweight fzf/delta review picker")
+    argument_parser.add_argument(
+        "--ignore",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="hide a changed file path, directory, or glob from review commands; repeatable",
+    )
     subparsers = argument_parser.add_subparsers(dest="command")
 
     subparsers.add_parser("status", help="show changed files and reviewed checkboxes")
+    subparsers.add_parser("checked", help="show files marked reviewed")
     subparsers.add_parser("comments", help="show local #review comments")
     subparsers.add_parser("ui", help="open the interactive CLI app")
     subparsers.add_parser("open", help="open the current merge/pull request in the browser")
@@ -3072,10 +3874,10 @@ def normalize_args(arguments: Sequence[str]) -> list[str]:
     index = 0
     while index < len(arguments):
         argument = arguments[index]
-        if argument == "--base" and index + 1 < len(arguments):
+        if argument in {"--base", "--from", "--to", "--ignore"} and index + 1 < len(arguments):
             normalized.extend([argument, arguments[index + 1]])
             index += 2
-        elif argument.startswith("--base="):
+        elif argument.startswith(("--base=", "--from=", "--to=", "--ignore=")):
             normalized.append(argument)
             index += 1
         elif argument == "--fast":
@@ -3087,27 +3889,45 @@ def normalize_args(arguments: Sequence[str]) -> list[str]:
     return [*normalized, *remaining]
 
 
+def review_range_from_args(args: argparse.Namespace) -> ReviewRange:
+    """Return the selected review range from parsed CLI arguments."""
+    has_from = bool(args.from_ref)
+    has_to = bool(args.to_ref)
+    if has_from != has_to:
+        die("use --from and --to together")
+    if args.base and has_from:
+        die("use either --base or --from/--to")
+    if has_from and has_to:
+        return review_range(args.from_ref, args.to_ref, explicit=True)
+    return review_range(args.base or default_base())
+
+
 def main() -> None:
     """Run the review CLI."""
     args = parser().parse_args(normalize_args(sys.argv[1:]))
-    base = args.base or default_base()
-    verify_base(base)
+    ref_range = review_range_from_args(args)
+    ignore_patterns = tuple(args.ignore or [])
+    verify_range(ref_range)
 
     if args.fast:
-        fast_review(base)
+        fast_review(ref_range, ignore_patterns)
     elif args.command in {None, "ui"}:
-        interactive(base)
+        interactive(ref_range, ignore_patterns)
     elif args.command == "status":
-        print_status(base)
+        print_status(ref_range, ignore_patterns)
+    elif args.command == "checked":
+        print_checked(ref_range, ignore_patterns)
     elif args.command == "comments":
-        list_comments(base)
+        list_comments(ref_range, ignore_patterns)
     elif args.command == "diff":
-        show_diff(base, resolve_path(changed_files(base), args.file))
+        show_diff(ref_range, resolve_path(changed_files(ref_range, ignore_patterns), args.file))
     elif args.command == "edit":
-        open_file(resolve_path(changed_files(base), args.file))
+        open_file(resolve_path(changed_files(ref_range, ignore_patterns), args.file))
     elif args.command == "toggle":
-        toggle_reviewed(base, resolve_path(changed_files(base), args.file))
+        toggle_reviewed(ref_range, resolve_path(changed_files(ref_range, ignore_patterns), args.file))
     elif args.command == "open":
+        if not reviewable_files(ref_range, ignore_patterns):
+            die(f"no files changed in {range_label(ref_range)}; no review to open")
         provider = detect_provider()
         if provider is None:
             die("could not detect provider from git remote")
@@ -3117,7 +3937,13 @@ def main() -> None:
         provider = detect_provider() if args.provider == "auto" else args.provider
         if provider is None:
             die("could not detect provider from git remote; pass --provider gitlab or --provider github")
-        published = publish_comments(base, provider, args.dry_run, force=args.force)
+        published = publish_comments(
+            ref_range,
+            provider,
+            args.dry_run,
+            force=args.force,
+            ignore_patterns=ignore_patterns,
+        )
         removed = remove_published_markers(published) if published else 0
         if removed:
             print(f"Removed {removed} local review marker{'s' if removed != 1 else ''}.")

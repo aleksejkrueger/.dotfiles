@@ -31,6 +31,7 @@ typeset -U path fpath
 path=(
   "$PYENV_ROOT/bin"
   "$HOME/.local/bin"
+  "$DOTFILES/src"
   "/opt/homebrew/bin"
   "$HOME/Library/Python/3.9/bin"
   "$HOME/.cargo/bin"
