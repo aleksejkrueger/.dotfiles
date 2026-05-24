@@ -168,10 +168,13 @@ jira_assignment_jql_encoded() {
 }
 
 jira_assignment_jql() {
-  local quoted_statuses jql
-  quoted_statuses="$(printf '"%s",' "${DONE_STATUSES[@]}")"
-  quoted_statuses="${quoted_statuses%,}"
-  jql="project = IPRO AND assignee = \"$JIRA_NAME\" AND statusCategory != Done AND resolution is EMPTY AND status not in ($quoted_statuses) ORDER BY updated DESC"
+  local quoted_done_statuses assignee_clause open_assigned_clause development_assigned_clause jql
+  quoted_done_statuses="$(printf '"%s",' "${DONE_STATUSES[@]}")"
+  quoted_done_statuses="${quoted_done_statuses%,}"
+  assignee_clause="assignee = \"$JIRA_NAME\""
+  open_assigned_clause="$assignee_clause AND statusCategory != Done AND resolution is EMPTY AND status not in ($quoted_done_statuses)"
+  development_assigned_clause="$assignee_clause AND statusCategory = \"In Progress\""
+  jql="project = IPRO AND (($open_assigned_clause) OR ($development_assigned_clause)) ORDER BY updated DESC"
   printf '%s\n' "$jql"
 }
 
@@ -260,7 +263,13 @@ try:
 
     print(json.dumps({"issues": all_issues, "total": len(all_issues)}))
 except HTTPError as error:
-    raise SystemExit(f"Jira API returned HTTP {error.code}. Check Jira API token/user in {Path.home() / '.config/jiratui/config.yaml'}.")
+    detail = error.read().decode("utf-8", errors="replace").strip()
+    message = f"Jira API returned HTTP {error.code}."
+    if error.code in (401, 403):
+        message = f"{message} Check Jira API token/user in {Path.home() / '.config/jiratui/config.yaml'}."
+    if detail:
+        message = f"{message} {detail}"
+    raise SystemExit(message)
 except URLError as error:
     raise SystemExit(f"Could not reach Jira API: {error.reason}")
 PY

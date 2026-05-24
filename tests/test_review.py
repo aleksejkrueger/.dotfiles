@@ -158,6 +158,100 @@ class ReviewRangeTest(unittest.TestCase):
 
         self.assertEqual(highlighted, [review["StyledSegment"]("selected", 4, False, True)])
 
+    def test_comment_annotations_by_line_formats_local_and_remote_comments(self) -> None:
+        """Build compact inline diff annotations for local and remote comments."""
+        review = load_review()
+        local_comment = review["ReviewComment"]("src/app.py", 10, 9, "Rename\nthis variable.")
+        root_note = review["RemoteNote"]("src/app.py", 12, "alice", "Please adjust.", "note-1")
+        reply_note = review["RemoteNote"]("src/app.py", 12, "bob", "Done.", "note-2", is_reply=True)
+        remote_thread = review["RemoteThread"]("thread-1", "src/app.py", 12, (root_note, reply_note))
+
+        annotations = review["comment_annotations_by_line"]([local_comment], [remote_thread])
+
+        self.assertEqual(annotations[9], ["review local: Rename this variable."])
+        self.assertEqual(annotations[12], ["review @alice: Please adjust. (+1 reply)"])
+
+    def test_rendered_comment_annotations_match_diff_line_and_truncate(self) -> None:
+        """Return annotation rows aligned to the changed-file side."""
+        review = load_review()
+        annotations = {99: ["review local: Rename this variable."]}
+
+        rows = review["rendered_comment_annotations"]("│ 98 │ old │ 99 │ selected", annotations, 60)
+
+        self.assertEqual(rows, ["                  review local: Rename this variable."])
+
+    def test_rendered_comment_annotations_truncate_inside_changed_file_side(self) -> None:
+        """Truncate annotations after padding to the changed-file side."""
+        review = load_review()
+        annotations = {99: ["review local: Rename this variable."]}
+
+        rows = review["rendered_comment_annotations"]("│ 98 │ old │ 99 │ selected", annotations, 24)
+
+        self.assertEqual(rows, ["                  rev..."])
+
+    def test_next_comment_diff_index_wraps_forward_and_backward(self) -> None:
+        """Find the next rendered diff row with a review comment."""
+        review = load_review()
+        lines = [
+            "│ 10 │ old │ 10 │ first",
+            "│ 11 │ old │ 11 │ second",
+            "│ 12 │ old │ 12 │ third",
+        ]
+
+        next_index = review["next_comment_diff_index"](lines, 0, {11, 12}, 1)
+        wrapped_index = review["next_comment_diff_index"](lines, 2, {11, 12}, 1)
+        previous_index = review["next_comment_diff_index"](lines, 2, {11, 12}, -1)
+
+        self.assertEqual(next_index, 1)
+        self.assertEqual(wrapped_index, 1)
+        self.assertEqual(previous_index, 1)
+
+    def test_jump_comment_wraps_from_focused_last_comment(self) -> None:
+        """Wrap from the focused last comment even when the scroll top was clamped."""
+        review = load_review()
+
+        class FakeScreen:
+            """Minimal screen object for comment jump tests."""
+
+            def getmaxyx(self) -> tuple[int, int]:
+                """Return a stable terminal size."""
+                return 20, 80
+
+        app = review["ReviewApp"].__new__(review["ReviewApp"])
+        app.screen = FakeScreen()
+        app.files = [review["ChangedFile"](1, "src/app.py")]
+        app.selected = 0
+        app.reviewed = set()
+        app.ignored = set()
+        app.search_query = ""
+        app.search_error = ""
+        app.file_filter = "all"
+        app.comments_by_path = {
+            "src/app.py": [
+                review["ReviewComment"]("src/app.py", 10, 11, "First."),
+                review["ReviewComment"]("src/app.py", 11, 12, "Second."),
+            ]
+        }
+        app.remote_threads_by_path = {}
+        app.ref_range = review["review_range"]("main")
+        app.branch = "feature/demo"
+        app.diff_scroll = 1
+        app.comment_diff_path = "src/app.py"
+        app.comment_diff_index = 2
+        app.diff_cache = {
+            ("src/app.py", 80): [
+                "│ 10 │ old │ 10 │ before",
+                "│ 11 │ old │ 11 │ first",
+                "│ 12 │ old │ 12 │ second",
+            ]
+        }
+
+        app.jump_comment(1)
+
+        self.assertEqual(app.diff_scroll, 1)
+        self.assertEqual(app.comment_diff_index, 1)
+        self.assertEqual(app.message, "Next comment line 11.")
+
     def test_open_review_request_skips_empty_review_range(self) -> None:
         """Do not delegate to provider CLIs when there are no changed files."""
         review = load_review()
@@ -611,6 +705,71 @@ class ReplyDraftTest(unittest.TestCase):
         self.assertEqual(thread.path, "src/app.py")
         self.assertEqual(len(review["note_suggestions"](thread.notes[0])), 1)
 
+    def test_fetch_gitlab_threads_paginates_discussions(self) -> None:
+        """Load GitLab discussions beyond the first API page."""
+        review = load_review()
+        commands: list[list[str]] = []
+
+        def fake_project_path() -> str:
+            """Return a stable encoded GitLab project path."""
+            return "group%2Frepo"
+
+        def fake_mr_iid() -> str:
+            """Return a stable merge request IID."""
+            return "7"
+
+        def fake_draft_threads(project: str, iid: str) -> list[object]:
+            """Return no pending draft threads for this test."""
+            self.assertEqual(project, "group%2Frepo")
+            self.assertEqual(iid, "7")
+            return []
+
+        def fake_run(command: list[str], *, input_text: str | None = None) -> str:
+            """Return one paginated GitLab diff discussion."""
+            commands.append(command)
+            return json.dumps(
+                [
+                    {
+                        "id": "system-thread",
+                        "notes": [
+                            {
+                                "body": "added 1 commit",
+                                "system": True,
+                                "author": {"username": "gitlab"},
+                            }
+                        ],
+                    },
+                    {
+                        "id": "review-thread",
+                        "notes": [
+                            {
+                                "id": 101,
+                                "body": "Please fix this.",
+                                "system": False,
+                                "author": {"username": "alice"},
+                                "position": {"new_path": "src/app.py", "new_line": 12},
+                            }
+                        ],
+                    },
+                ]
+            )
+
+        fetch_threads = review["fetch_gitlab_threads"]
+        fetch_threads.__globals__["gitlab_project_path"] = fake_project_path
+        fetch_threads.__globals__["gitlab_mr_iid"] = fake_mr_iid
+        fetch_threads.__globals__["fetch_gitlab_draft_threads"] = fake_draft_threads
+        fetch_threads.__globals__["run"] = fake_run
+
+        threads = fetch_threads()
+
+        self.assertEqual(
+            commands,
+            [["glab", "api", "projects/group%2Frepo/merge_requests/7/discussions", "--paginate"]],
+        )
+        self.assertEqual(len(threads), 1)
+        self.assertEqual(threads[0].path, "src/app.py")
+        self.assertEqual(threads[0].line, 12)
+
     def test_github_pending_review_threads_are_loaded(self) -> None:
         """Fetch pending GitHub review comments from review-specific endpoints."""
         review = load_review()
@@ -845,6 +1004,7 @@ class HelpPopupTest(unittest.TestCase):
         self.assertIn("Main", text)
         self.assertIn("?            show this help", text)
         self.assertIn("f            cycle all/unchecked/checked/ignored/comments filters", text)
+        self.assertIn("g/G          jump next/previous review comment in the diff", text)
         self.assertIn("m            open comments popup", text)
         self.assertIn("t            open Jira ticket popup", text)
         self.assertIn("Comments Popup", text)

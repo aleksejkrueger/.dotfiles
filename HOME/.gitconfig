@@ -8,6 +8,12 @@
 	helper = !pass-git-helper $@
 [include]
 	path = ~/.gitconfig-codefactory-rules
+  ;[includeIf "hasconfig:remote.*.url:https://<URL>/**"]
+    ;path = ~/.gitconfig-codefactory
+  ;[includeIf "hasconfig:remote.*.url:ssh://<URL>/**"]
+    ;path = ~/.gitconfig-codefactory
+  ;[includeIf "hasconfig:remote.*.url:git@<URL>:**"]
+    ;path = ~/.gitconfig-codefactory
 [push]
 	autoSetupRemote = true
 [alias]

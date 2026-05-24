@@ -7,7 +7,7 @@ import = ["~/.dotfiles/HOME/.config/alacritty/alacritty/dracula.toml"]
   args = [
     "--login",
     "-c",
-    "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux; /opt/homebrew/bin/gpg-connect-agent reloadagent /bye; exec $SHELL"
+    "/opt/homebrew/bin/gpg-connect-agent updatestartuptty /bye >/dev/null 2>&1; exec /opt/homebrew/bin/tmux new-session -A -s main"
   ]
 
 [font]

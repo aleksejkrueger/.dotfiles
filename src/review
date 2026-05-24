@@ -25,6 +25,7 @@ Useful keys in the UI:
 - Space toggles the reviewed checkbox for the selected file.
 - i toggles the ignored flag for the selected file.
 - f cycles all/unchecked/checked/ignored/comments filters.
+- g/G jumps to the next or previous review comment in the diff.
 - n/N jumps to the next or previous unreviewed file.
 - c/e opens the selected file in the configured editor.
 - d opens the selected diff in the pager.
@@ -96,7 +97,7 @@ EXPORT_RE = re.compile(r"^\s*export\s+(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>
 JIRA_KEY_RE = re.compile(r"(?<![A-Z0-9])(?P<key>[A-Z][A-Z0-9]+-\d+)(?![A-Z0-9])")
 BASIC_ANSI_COLOR_CODES = {*range(30, 38), *range(90, 98)}
 HELP_TEXT = (
-    "? help  / search  f filter  n/N next/previous  j/k move  J/K scroll  Space check  i ignore  c/e edit  m comments  t ticket  d pager  o open  R remote  "
+    "? help  / search  f filter  g/G comments  n/N next/previous  j/k move  J/K scroll  Space check  i ignore  c/e edit  m comments  t ticket  d pager  o open  R remote  "
     "p publish  r refresh  q quit"
 )
 FILE_FILTERS = ("all", "unchecked", "checked", "ignored", "comments")
@@ -1003,6 +1004,17 @@ def local_comment_indicator_lines(comments: Sequence[ReviewComment], limit: int)
     return lines
 
 
+def truncate_text(text: str, width: int) -> str:
+    """Return text shortened to fit a fixed terminal width."""
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return f"{text[: width - 3]}..."
+
+
 def remove_published_markers_from_file(path: str, published_ids: set[str]) -> int:
     """Remove standalone local review marker lines by comment ID."""
     file_path = Path(path)
@@ -1267,10 +1279,86 @@ def rendered_new_line_matches_any(line: str, line_numbers: set[int]) -> bool:
     return any(rendered_new_line_matches(line, line_number) for line_number in line_numbers)
 
 
+def rendered_matching_new_line(line: str, line_numbers: set[int]) -> int | None:
+    """Return the matching new-side line number for a rendered diff row."""
+    for line_number in sorted(line_numbers):
+        if rendered_new_line_matches(line, line_number):
+            return line_number
+    return None
+
+
+def rendered_new_side_column(line: str) -> int:
+    """Return the visible column where the changed-file content starts."""
+    text = ANSI_RE.sub("", line)
+    separators = [index for index, character in enumerate(text) if character == "│"]
+    if len(separators) >= 4:
+        return separators[3] + 2
+    return 4
+
+
 def comment_highlight_segments(segments: Sequence[StyledSegment]) -> list[StyledSegment]:
     """Return diff segments styled for a highlighted review comment line."""
     highlight = theme_color("comment")
     return [StyledSegment(segment.text, highlight, segment.bold, True) for segment in segments]
+
+
+def local_comment_annotation(comment: ReviewComment) -> str:
+    """Return an inline diff annotation for a local review comment."""
+    return f"review local: {one_line_comment_body(comment.body)}"
+
+
+def remote_thread_annotation(thread: RemoteThread) -> str | None:
+    """Return an inline diff annotation for a remote review thread."""
+    if not thread.notes:
+        return None
+    note = thread.notes[0]
+    author = f"@{note.author}" if note.author else "remote"
+    state = " pending" if thread.pending else " resolved" if thread.resolved else ""
+    replies = max(0, len(thread.notes) - 1)
+    suffix = f" (+{replies} repl{'y' if replies == 1 else 'ies'})" if replies else ""
+    return f"review {author}{state}: {one_line_comment_body(note.body)}{suffix}"
+
+
+def comment_annotations_by_line(
+    local_comments: Sequence[ReviewComment],
+    remote_threads: Sequence[RemoteThread],
+) -> dict[int, list[str]]:
+    """Return compact inline diff annotations keyed by target line."""
+    annotations: dict[int, list[str]] = {}
+    for comment in local_comments:
+        if comment.target_line > 0:
+            annotations.setdefault(comment.target_line, []).append(local_comment_annotation(comment))
+    for thread in remote_threads:
+        annotation = remote_thread_annotation(thread)
+        if annotation is not None and thread.line > 0:
+            annotations.setdefault(thread.line, []).append(annotation)
+    return annotations
+
+
+def rendered_comment_annotations(line: str, annotations_by_line: dict[int, list[str]], width: int) -> list[str]:
+    """Return inline annotation rows for a rendered diff row."""
+    line_number = rendered_matching_new_line(line, set(annotations_by_line))
+    if line_number is None:
+        return []
+    column = min(rendered_new_side_column(line), max(0, width - 1))
+    prefix = " " * column
+    annotation_width = max(1, width - column)
+    return [f"{prefix}{truncate_text(annotation, annotation_width)}" for annotation in annotations_by_line[line_number]]
+
+
+def next_comment_diff_index(lines: Sequence[str], current_index: int, comment_lines: set[int], step: int) -> int | None:
+    """Return the next rendered diff index that has a review comment."""
+    if not lines or not comment_lines or step == 0:
+        return None
+
+    total = len(lines)
+    direction = 1 if step > 0 else -1
+    start = max(0, min(current_index, total - 1))
+    for offset in range(1, total + 1):
+        index = (start + (offset * direction)) % total
+        if rendered_matching_new_line(lines[index], comment_lines) is not None:
+            return index
+    return None
 
 
 def file_newline(text: str) -> str:
@@ -1753,7 +1841,7 @@ def fetch_gitlab_threads() -> list[RemoteThread]:
     """Fetch GitLab MR discussion threads."""
     project = gitlab_project_path()
     iid = gitlab_mr_iid()
-    discussions = json.loads(run(["glab", "api", f"projects/{project}/merge_requests/{iid}/discussions"]))
+    discussions = json.loads(run(["glab", "api", f"projects/{project}/merge_requests/{iid}/discussions", "--paginate"]))
     threads: list[RemoteThread] = []
     for discussion in discussions:
         discussion_path = ""
@@ -2604,6 +2692,7 @@ def help_popup_lines(width: int) -> list[tuple[str, int]]:
             ("Space", "toggle reviewed checkbox"),
             ("i", "toggle ignored flag"),
             ("f", "cycle all/unchecked/checked/ignored/comments filters"),
+            ("g/G", "jump next/previous review comment in the diff"),
             ("n/N", "jump next/previous unreviewed file"),
             ("c/e", "open selected file in editor"),
             ("d", "open selected diff in pager"),
@@ -2773,6 +2862,8 @@ class ReviewApp:
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
+        self.comment_diff_path: str | None = None
+        self.comment_diff_index: int | None = None
         self.message = "Ready."
         self.diff_cache: dict[tuple[str, int], list[str]] = {}
         self.search_query = ""
@@ -2807,7 +2898,12 @@ class ReviewApp:
         elif self.file_filter == "ignored":
             files = [changed_file for changed_file in files if changed_file.path in self.ignored]
         elif self.file_filter == "comments":
-            files = [changed_file for changed_file in files if changed_file.path in self.comments_by_path]
+            files = [
+                changed_file
+                for changed_file in files
+                if changed_file.path in self.comments_by_path
+                or changed_file.path in self.remote_threads_by_path
+            ]
 
         if not self.search_query:
             self.search_error = ""
@@ -2829,6 +2925,7 @@ class ReviewApp:
         self.comments_by_path = comments_by_path(self.files)
         self.selected = max(0, min(self.selected, max(0, len(self.visible_files()) - 1)))
         self.diff_cache.clear()
+        self.clear_comment_jump()
 
     def run(self) -> None:
         """Run the curses event loop."""
@@ -2859,8 +2956,10 @@ class ReviewApp:
             self.move_selection(-1)
         elif key in {ord("J"), curses.KEY_NPAGE}:
             self.diff_scroll += 10
+            self.clear_comment_jump()
         elif key in {ord("K"), curses.KEY_PPAGE}:
             self.diff_scroll = max(0, self.diff_scroll - 10)
+            self.clear_comment_jump()
         elif key == ord(" "):
             self.toggle_current()
         elif key == ord("i"):
@@ -2880,6 +2979,10 @@ class ReviewApp:
             self.message = "Search mode. Enter accepts, Esc leaves, Ctrl-U clears."
         elif key == ord("f"):
             self.cycle_file_filter()
+        elif key == ord("g"):
+            self.jump_comment(1)
+        elif key == ord("G"):
+            self.jump_comment(-1)
         elif key == ord("n"):
             self.jump_unreviewed(1)
         elif key == ord("N"):
@@ -2917,6 +3020,7 @@ class ReviewApp:
             return
         self.selected = max(0, min(len(files) - 1, self.selected + step))
         self.diff_scroll = 0
+        self.clear_comment_jump()
 
     def append_search_char(self, character: str) -> None:
         """Append one typed character to the regex search."""
@@ -2924,6 +3028,7 @@ class ReviewApp:
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
+        self.clear_comment_jump()
 
     def delete_search_char(self) -> None:
         """Delete one character from the regex search."""
@@ -2931,6 +3036,7 @@ class ReviewApp:
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
+        self.clear_comment_jump()
 
     def delete_search_word(self) -> None:
         """Delete the last regex search word."""
@@ -2939,6 +3045,7 @@ class ReviewApp:
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
+        self.clear_comment_jump()
 
     def clear_search(self) -> None:
         """Clear the active regex search."""
@@ -2947,6 +3054,7 @@ class ReviewApp:
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
+        self.clear_comment_jump()
         self.message = "Search cleared."
 
     def cycle_file_filter(self) -> None:
@@ -2956,6 +3064,7 @@ class ReviewApp:
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
+        self.clear_comment_jump()
         self.message = f"Showing {self.file_filter} files."
 
     def jump_unreviewed(self, step: int) -> None:
@@ -2970,10 +3079,66 @@ class ReviewApp:
             if files[index].path not in self.reviewed and files[index].path not in self.ignored:
                 self.selected = index
                 self.diff_scroll = 0
+                self.clear_comment_jump()
                 direction = "Next" if step > 0 else "Previous"
                 self.message = f"{direction}: {files[index].path}"
                 return
         self.message = "No unreviewed files in current view."
+
+    def clear_comment_jump(self) -> None:
+        """Forget the focused comment jump position."""
+        self.comment_diff_path = None
+        self.comment_diff_index = None
+
+    def comment_jump_start_index(self, current: ChangedFile) -> int:
+        """Return the diff index to use as the next comment jump origin."""
+        comment_diff_path = getattr(self, "comment_diff_path", None)
+        comment_diff_index = getattr(self, "comment_diff_index", None)
+        if comment_diff_path == current.path and comment_diff_index is not None:
+            return comment_diff_index
+        return self.diff_scroll
+
+    def current_comment_annotations_by_line(self) -> dict[int, list[str]]:
+        """Return inline comment annotations for the selected file."""
+        current = self.selected_file()
+        if current is None:
+            return {}
+        return comment_annotations_by_line(
+            self.comments_by_path.get(current.path, []),
+            self.remote_threads_by_path.get(current.path, []),
+        )
+
+    def jump_comment(self, step: int) -> None:
+        """Jump to the next or previous review comment in the selected file diff."""
+        current = self.selected_file()
+        if current is None:
+            return
+        annotations_by_line = self.current_comment_annotations_by_line()
+        if not annotations_by_line:
+            self.message = "No comments in current file."
+            return
+
+        _, width = self.screen.getmaxyx()
+        cache_key = (current.path, width)
+        if cache_key not in self.diff_cache:
+            self.diff_cache[cache_key] = side_by_side_diff_lines(self.ref_range, current.path, width, self.branch)
+        index = next_comment_diff_index(
+            self.diff_cache[cache_key],
+            self.comment_jump_start_index(current),
+            set(annotations_by_line),
+            step,
+        )
+        if index is None:
+            self.message = "No comment lines found in rendered diff."
+            return
+
+        self.diff_scroll = index
+        self.comment_diff_path = current.path
+        self.comment_diff_index = index
+        direction = "Next" if step > 0 else "Previous"
+        line_number = rendered_matching_new_line(self.diff_cache[cache_key][index], set(annotations_by_line))
+        suffix = f" line {line_number}" if line_number is not None else ""
+        self.message = f"{direction} comment{suffix}."
 
     def toggle_current(self) -> None:
         """Toggle reviewed state for the selected file."""
@@ -2995,6 +3160,7 @@ class ReviewApp:
         self.ignored = ignored_file_paths(self.state)
         self.selected = max(0, min(self.selected, max(0, len(self.visible_files()) - 1)))
         self.diff_scroll = 0
+        self.clear_comment_jump()
         action = "Ignored" if is_now_ignored else "Unignored"
         self.message = f"{action} {current.path}."
 
@@ -3005,6 +3171,7 @@ class ReviewApp:
             return
         self.suspend(lambda: open_file(current.path))
         self.reload()
+        self.clear_comment_jump()
         self.message = f"Edited {current.path}."
 
     def open_current_diff(self) -> None:
@@ -3481,6 +3648,8 @@ class ReviewApp:
         for index, line in enumerate(self.diff_cache[cache_key]):
             if rendered_new_line_matches(line, line_number):
                 self.diff_scroll = index
+                self.comment_diff_path = path
+                self.comment_diff_index = index
                 return True
         return False
 
@@ -3808,7 +3977,9 @@ class ReviewApp:
             changed_file = files[index]
             checked = "x" if changed_file.path in self.reviewed else " "
             ignored = "i" if changed_file.path in self.ignored else " "
-            count = len(self.comments_by_path.get(changed_file.path, []))
+            count = len(self.comments_by_path.get(changed_file.path, [])) + len(
+                self.remote_threads_by_path.get(changed_file.path, [])
+            )
             suffix = f" ({count})" if count else ""
             label = f"[{checked}][{ignored}] {changed_file.path}{suffix}"
             color = (
@@ -3840,11 +4011,17 @@ class ReviewApp:
             self.comments_by_path.get(current.path, []),
             self.remote_threads_by_path.get(current.path, []),
         )
+        annotations_by_line = comment_annotations_by_line(
+            self.comments_by_path.get(current.path, []),
+            self.remote_threads_by_path.get(current.path, []),
+        )
         max_scroll = max(0, len(lines) - height + 1)
         self.diff_scroll = max(0, min(self.diff_scroll, max_scroll))
 
-        for row in range(max(1, height - 1)):
-            index = self.diff_scroll + row
+        visible_height = max(1, height - 1)
+        row = 0
+        index = self.diff_scroll
+        while row < visible_height:
             line = lines[index] if index < len(lines) else ""
             segments = parse_ansi_line(line)
             has_comment = rendered_new_line_matches_any(line, comment_lines)
@@ -3855,6 +4032,13 @@ class ReviewApp:
             if padding > 0:
                 mode = color_pair(theme_color("comment"), reverse=True) if has_comment else 0
                 add_text(self.screen, y + row + 1, x + width - padding, " " * padding, padding, mode)
+            row += 1
+            for annotation in rendered_comment_annotations(line, annotations_by_line, width):
+                if row >= visible_height:
+                    break
+                add_text(self.screen, y + row + 1, x, annotation.ljust(width), width, color_pair(theme_color("comment")))
+                row += 1
+            index += 1
 
     def draw_comments(self, y: int, x: int, height: int, width: int) -> None:
         """Draw comments for the selected file."""
