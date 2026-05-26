@@ -132,7 +132,7 @@ local avante_config = {
       insert = "<C-s>",
     },
     cancel = {
-      normal = { "<C-c>", "<Esc>", "q" },
+      normal = { "<C-c>", "q" },
       insert = { "<C-c>" },
     },
     sidebar = {
@@ -144,7 +144,7 @@ local avante_config = {
       reverse_switch_windows = "<S-Tab>",
       remove_file = "d",
       add_file = "@",
-      close = { "<Esc>", "q" },
+      close = { "q" },
       close_from_input = nil,
     },
   },

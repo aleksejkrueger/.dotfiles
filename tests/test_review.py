@@ -429,6 +429,28 @@ class ReviewRangeTest(unittest.TestCase):
 
         self.assertEqual([changed_file.path for changed_file in app.visible_files()], ["docs/readme.md"])
 
+    def test_file_filter_cycles_forward_and_backward(self) -> None:
+        """Use f and F to cycle filters in opposite directions."""
+        review = load_review()
+        app = review["ReviewApp"].__new__(review["ReviewApp"])
+        app.file_filter = "all"
+        app.selected = 2
+        app.file_scroll = 2
+        app.diff_scroll = 4
+        app.search_active = False
+
+        app.handle_key(ord("f"))
+        self.assertEqual(app.file_filter, "unchecked")
+
+        app.handle_key(ord("F"))
+        self.assertEqual(app.file_filter, "all")
+
+        app.handle_key(ord("F"))
+        self.assertEqual(app.file_filter, "comments")
+        self.assertEqual(app.selected, 0)
+        self.assertEqual(app.file_scroll, 0)
+        self.assertEqual(app.diff_scroll, 0)
+
     def test_local_comment_indicator_lines_include_comment_bodies(self) -> None:
         """Render compact local comment rows with the actual marker body."""
         review = load_review()
@@ -838,6 +860,74 @@ class ThreadActionTest(unittest.TestCase):
 
         self.assertTrue(review["is_escape_key"](27))
 
+    def test_escape_key_does_not_quit_main_ui(self) -> None:
+        """Only q quits the main review UI."""
+        review = load_review()
+
+        self.assertFalse(review["is_main_quit_key"](27))
+        self.assertTrue(review["is_main_quit_key"](ord("q")))
+
+    def test_suspend_flushes_editor_input_before_resuming(self) -> None:
+        """Discard queued editor keys before returning to the review UI."""
+        review = load_review()
+        calls: list[str] = []
+
+        class FakeCurses:
+            """Small curses stand-in for suspend sequencing."""
+
+            @staticmethod
+            def def_prog_mode() -> None:
+                """Record saving the curses program mode."""
+                calls.append("def_prog_mode")
+
+            @staticmethod
+            def endwin() -> None:
+                """Record leaving curses mode."""
+                calls.append("endwin")
+
+            @staticmethod
+            def reset_prog_mode() -> None:
+                """Record restoring curses mode."""
+                calls.append("reset_prog_mode")
+
+            @staticmethod
+            def curs_set(value: int) -> None:
+                """Record cursor visibility changes."""
+                calls.append(f"curs_set:{value}")
+
+            @staticmethod
+            def flushinp() -> None:
+                """Record flushing queued terminal input."""
+                calls.append("flushinp")
+
+        class FakeScreen:
+            """Small screen stand-in for keypad restoration."""
+
+            @staticmethod
+            def keypad(enabled: bool) -> None:
+                """Record keypad mode changes."""
+                calls.append(f"keypad:{enabled}")
+
+        app = review["ReviewApp"].__new__(review["ReviewApp"])
+        app.screen = FakeScreen()
+        review["ReviewApp"].suspend.__globals__["curses"] = FakeCurses
+
+        result = app.suspend(lambda: calls.append("action") or "done")
+
+        self.assertEqual(result, "done")
+        self.assertEqual(
+            calls,
+            [
+                "def_prog_mode",
+                "endwin",
+                "action",
+                "reset_prog_mode",
+                "curs_set:0",
+                "flushinp",
+                "keypad:True",
+            ],
+        )
+
     def test_toggle_resolved_rejects_unsupported_provider(self) -> None:
         """Do not call provider APIs for unsupported resolve toggles."""
         review = load_review()
@@ -1003,7 +1093,7 @@ class HelpPopupTest(unittest.TestCase):
 
         self.assertIn("Main", text)
         self.assertIn("?            show this help", text)
-        self.assertIn("f            cycle all/unchecked/checked/ignored/comments filters", text)
+        self.assertIn("f/F          cycle all/unchecked/checked/ignored/comments filters forward/backward", text)
         self.assertIn("g/G          jump next/previous review comment in the diff", text)
         self.assertIn("m            open comments popup", text)
         self.assertIn("t            open Jira ticket popup", text)

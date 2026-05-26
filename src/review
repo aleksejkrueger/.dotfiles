@@ -24,7 +24,7 @@ Useful keys in the UI:
 - / starts regex file search.
 - Space toggles the reviewed checkbox for the selected file.
 - i toggles the ignored flag for the selected file.
-- f cycles all/unchecked/checked/ignored/comments filters.
+- f/F cycles all/unchecked/checked/ignored/comments filters forward/backward.
 - g/G jumps to the next or previous review comment in the diff.
 - n/N jumps to the next or previous unreviewed file.
 - c/e opens the selected file in the configured editor.
@@ -97,7 +97,7 @@ EXPORT_RE = re.compile(r"^\s*export\s+(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>
 JIRA_KEY_RE = re.compile(r"(?<![A-Z0-9])(?P<key>[A-Z][A-Z0-9]+-\d+)(?![A-Z0-9])")
 BASIC_ANSI_COLOR_CODES = {*range(30, 38), *range(90, 98)}
 HELP_TEXT = (
-    "? help  / search  f filter  g/G comments  n/N next/previous  j/k move  J/K scroll  Space check  i ignore  c/e edit  m comments  t ticket  d pager  o open  R remote  "
+    "? help  / search  f/F filter  g/G comments  n/N next/previous  j/k move  J/K scroll  Space check  i ignore  c/e edit  m comments  t ticket  d pager  o open  R remote  "
     "p publish  r refresh  q quit"
 )
 FILE_FILTERS = ("all", "unchecked", "checked", "ignored", "comments")
@@ -2691,7 +2691,7 @@ def help_popup_lines(width: int) -> list[tuple[str, int]]:
             ("J/K", "scroll the diff"),
             ("Space", "toggle reviewed checkbox"),
             ("i", "toggle ignored flag"),
-            ("f", "cycle all/unchecked/checked/ignored/comments filters"),
+            ("f/F", "cycle all/unchecked/checked/ignored/comments filters forward/backward"),
             ("g/G", "jump next/previous review comment in the diff"),
             ("n/N", "jump next/previous unreviewed file"),
             ("c/e", "open selected file in editor"),
@@ -2792,6 +2792,11 @@ def copy_to_clipboard(text: str) -> tuple[bool, str]:
 def is_escape_key(key: int) -> bool:
     """Return whether a curses key should cancel the current mode."""
     return key in {27, curses.KEY_EXIT}
+
+
+def is_main_quit_key(key: int) -> bool:
+    """Return whether a curses key should quit the main review UI."""
+    return key == ord("q")
 
 
 def prompt(window: curses.window, label: str) -> str | None:
@@ -2898,11 +2903,12 @@ class ReviewApp:
         elif self.file_filter == "ignored":
             files = [changed_file for changed_file in files if changed_file.path in self.ignored]
         elif self.file_filter == "comments":
+            remote_threads_by_path = getattr(self, "remote_threads_by_path", {})
             files = [
                 changed_file
                 for changed_file in files
                 if changed_file.path in self.comments_by_path
-                or changed_file.path in self.remote_threads_by_path
+                or changed_file.path in remote_threads_by_path
             ]
 
         if not self.search_query:
@@ -2942,7 +2948,7 @@ class ReviewApp:
             curses.curs_set(1 if self.search_active else 0)
             self.draw()
             key = self.screen.getch()
-            if not self.search_active and key in {ord("q"), 27}:
+            if not self.search_active and is_main_quit_key(key):
                 return
             self.handle_key(key)
 
@@ -2978,7 +2984,9 @@ class ReviewApp:
             self.search_active = True
             self.message = "Search mode. Enter accepts, Esc leaves, Ctrl-U clears."
         elif key == ord("f"):
-            self.cycle_file_filter()
+            self.cycle_file_filter(1)
+        elif key == ord("F"):
+            self.cycle_file_filter(-1)
         elif key == ord("g"):
             self.jump_comment(1)
         elif key == ord("G"):
@@ -3057,10 +3065,10 @@ class ReviewApp:
         self.clear_comment_jump()
         self.message = "Search cleared."
 
-    def cycle_file_filter(self) -> None:
-        """Cycle the file list filter."""
+    def cycle_file_filter(self, step: int) -> None:
+        """Cycle the file list filter by one direction."""
         index = FILE_FILTERS.index(self.file_filter)
-        self.file_filter = FILE_FILTERS[(index + 1) % len(FILE_FILTERS)]
+        self.file_filter = FILE_FILTERS[(index + step) % len(FILE_FILTERS)]
         self.selected = 0
         self.file_scroll = 0
         self.diff_scroll = 0
@@ -3900,6 +3908,7 @@ class ReviewApp:
         finally:
             curses.reset_prog_mode()
             curses.curs_set(0)
+            curses.flushinp()
             self.screen.keypad(True)
 
     def draw(self) -> None:
