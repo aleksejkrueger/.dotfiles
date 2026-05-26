@@ -15,24 +15,6 @@ require("luasnip.loaders.from_vscode").lazy_load()
 -- basic settings
 vim.opt.completeopt = { "menu", "menuone", "noselect" }
 
--- lsp capabilities
-local cmp_nvim_lsp = require("cmp_nvim_lsp")
-local capabilities = cmp_nvim_lsp.default_capabilities()
-
-require("lspconfig").pyright.setup{
-    capabilities = capabilities,
-    on_attach = function(client, bufnr)
-
-    -- keymaps for docs
-    vim.api.nvim_buf_set_keymap(bufnr, "n", "K", "<cmd>lua vim.lsp.buf.hover()<CR>", { noremap=true, silent=true })
-    vim.api.nvim_buf_set_keymap(bufnr, "i", "<C-h>", "<cmd>lua vim.lsp.buf.signature_help()<CR>", { noremap=true, silent=true })
-
-    -- refresh cmp buffer source
-    cmp.setup.buffer({ sources = { { name = "nvim_lsp" } } })
-    print("pyright attached to buffer " .. bufnr)
-    end,
-}
-
 local sig_status_ok, lsp_signature = pcall(require, "lsp_signature")
 if sig_status_ok then
         lsp_signature.setup({

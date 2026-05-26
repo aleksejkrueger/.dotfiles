@@ -26,6 +26,7 @@ local core_specs = {
   { name = 'nvim-ts-context-commentstring', src = 'https://github.com/JoosepAlviste/nvim-ts-context-commentstring.git', version = 'cb064386e667def1d241317deed9fd1b38f0dc2e' },
   { name = 'nvim-web-devicons', src = 'https://github.com/kyazdani42/nvim-web-devicons.git', version = 'b4b302d6ae229f67df7a87ef69fa79473fe788a9' },
   { name = 'obsidian.nvim', src = 'https://github.com/obsidian-nvim/obsidian.nvim', version = '20432a5ca03d99a9d5ad51d362e19d9b832e46f0' },
+  { name = 'otter.nvim', src = 'https://github.com/jmbuhr/otter.nvim.git', version = 'a455e68a99d395889ab30a25ac3846a135e93c46' },
   { name = 'plenary.nvim', src = 'https://github.com/nvim-lua/plenary.nvim.git', version = 'a3e3bc82a3f95c5ed0d7201546d5d2c19b20d683' },
   { name = 'render-markdown.nvim', src = 'https://github.com/MeanderingProgrammer/render-markdown.nvim.git', version = 'd53856423be5ef3c267d26ee261b0981b372f718' },
   { name = 'telescope.nvim', src = 'https://github.com/nvim-telescope/telescope.nvim.git', version = 'dfa230be84a044e7f546a6c2b0a403c739732b86' },

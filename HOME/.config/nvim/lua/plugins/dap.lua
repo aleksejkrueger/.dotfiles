@@ -1,6 +1,23 @@
-local dap = require('dap')
-local dapui = require('dapui')
-local dap_virtual_text = require('nvim-dap-virtual-text')
+pcall(vim.cmd.packadd, "nvim-nio")
+
+local function require_plugin(module)
+  local status_ok, plugin = pcall(require, module)
+  if status_ok then
+    return plugin
+  end
+
+  vim.notify("Skipping DAP setup: missing " .. module, vim.log.levels.WARN)
+  return nil
+end
+
+local dap = require_plugin('dap')
+local dapui = require_plugin('dapui')
+local dap_virtual_text = require_plugin('nvim-dap-virtual-text')
+local dap_python = require_plugin('dap-python')
+
+if not dap or not dapui or not dap_virtual_text or not dap_python then
+  return
+end
 
 dap_virtual_text.setup()
 
@@ -36,13 +53,9 @@ dap.listeners.before.event_exited["dapui_config"] = function()
   dapui.close()
 end
 
-
-local dap_python = require('dap-python')
 dap_python.setup('~/.local/share/nvim/mason/packages/debugpy/venv/bin/python') -- Adjust the path to your virtual environment
 
 -- Keymaps for Python debugging
 vim.api.nvim_set_keymap('n', '<Leader>dn', [[<Cmd>lua require('dap-python').test_method()<CR>]], { noremap = true, silent = true })
 vim.api.nvim_set_keymap('n', '<Leader>df', [[<Cmd>lua require('dap-python').test_class()<CR>]], { noremap = true, silent = true })
 vim.api.nvim_set_keymap('v', '<Leader>ds', [[<Cmd>lua require('dap-python').debug_selection()<CR>]], { noremap = true, silent = true })
-
-

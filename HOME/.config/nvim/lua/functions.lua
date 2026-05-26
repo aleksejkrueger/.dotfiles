@@ -40,7 +40,7 @@ vim.api.nvim_create_user_command("Ppp", function()
   print(vim.fn.expand("%:p"))
 end, { desc = "print full file path" })
 
-local function zed_project_root()
+local function editor_project_root()
   local current_path = vim.api.nvim_buf_get_name(0)
   local start = current_path ~= "" and vim.fs.dirname(current_path) or vim.loop.cwd()
   local markers = {
@@ -59,7 +59,7 @@ local function zed_project_root()
   return root or vim.loop.cwd()
 end
 
-local function zed_buffer_paths(project_root)
+local function listed_file_buffer_paths(project_root)
   local paths = {}
   local seen = {}
 
@@ -89,33 +89,41 @@ local function zed_buffer_paths(project_root)
   return paths
 end
 
-vim.api.nvim_create_user_command("Zed", function()
-  if vim.fn.executable("zed") ~= 1 then
-    vim.notify("`zed` CLI not found in PATH", vim.log.levels.ERROR)
-    return
-  end
-
-  local project_root = zed_project_root()
-  local args = { "zed", project_root }
-
-  for _, path in ipairs(zed_buffer_paths(project_root)) do
-    if path ~= project_root then
-      table.insert(args, path)
+local function create_editor_command(command_name, executable, editor_name)
+  vim.api.nvim_create_user_command(command_name, function()
+    if vim.fn.executable(executable) ~= 1 then
+      vim.notify("`" .. executable .. "` CLI not found in PATH", vim.log.levels.ERROR)
+      return
     end
-  end
 
-  local job_id = vim.fn.jobstart(args, {
-    cwd = project_root,
-    detach = true,
+    local project_root = editor_project_root()
+    local args = { executable, project_root }
+
+    for _, path in ipairs(listed_file_buffer_paths(project_root)) do
+      if path ~= project_root then
+        table.insert(args, path)
+      end
+    end
+
+    local job_id = vim.fn.jobstart(args, {
+      cwd = project_root,
+      detach = true,
+    })
+
+    if job_id <= 0 then
+      vim.notify("Failed to launch " .. editor_name, vim.log.levels.ERROR)
+      return
+    end
+
+    vim.notify("Opened project in " .. editor_name .. ": " .. project_root, vim.log.levels.INFO)
+  end, {
+    desc = "Open the current project and listed file buffers in " .. editor_name,
+    force = true,
   })
+end
 
-  if job_id <= 0 then
-    vim.notify("Failed to launch Zed", vim.log.levels.ERROR)
-    return
-  end
-
-  vim.notify("Opened project in Zed: " .. project_root, vim.log.levels.INFO)
-end, { desc = "Open the current project and listed file buffers in Zed" })
+create_editor_command("Zed", "zed", "Zed")
+create_editor_command("Code", "code", "VS Code")
 
 local function insert_text_at_cursor(text)
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))

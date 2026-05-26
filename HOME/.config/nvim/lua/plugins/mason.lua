@@ -1,10 +1,45 @@
+local lspconfig = require("lspconfig")
+
+local function lsp_capabilities()
+  local status_ok, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
+  if not status_ok then
+    return vim.lsp.protocol.make_client_capabilities()
+  end
+
+  return cmp_nvim_lsp.default_capabilities()
+end
+
+local function lsp_keymap_options(bufnr, description)
+  return { buffer = bufnr, desc = description, silent = true }
+end
+
+local function set_lsp_keymaps(event)
+  local bufnr = event.buf
+
+  vim.keymap.set("n", "gd", vim.lsp.buf.definition, lsp_keymap_options(bufnr, "Go to definition"))
+  vim.keymap.set("n", "gD", vim.lsp.buf.declaration, lsp_keymap_options(bufnr, "Go to declaration"))
+  vim.keymap.set("n", "gi", vim.lsp.buf.implementation, lsp_keymap_options(bufnr, "Go to implementation"))
+  vim.keymap.set("n", "gr", vim.lsp.buf.references, lsp_keymap_options(bufnr, "Go to references"))
+  vim.keymap.set("n", "K", vim.lsp.buf.hover, lsp_keymap_options(bufnr, "Hover documentation"))
+  vim.keymap.set("i", "<C-h>", vim.lsp.buf.signature_help, lsp_keymap_options(bufnr, "Signature help"))
+end
+
+vim.api.nvim_create_autocmd("LspAttach", {
+  group = vim.api.nvim_create_augroup("dotfiles_lsp_keymaps", { clear = true }),
+  callback = set_lsp_keymaps,
+})
+
+local capabilities = lsp_capabilities()
+
 require('mason').setup()
 require('mason-lspconfig').setup {
-  ensure_installed = { "pyright", 'ruff'},
+  ensure_installed = { 'pyright', 'ruff' },
 }
 require('mason-lspconfig').setup_handlers {
   function(server_name)
-    require("lspconfig")[server_name].setup {}
+    lspconfig[server_name].setup {
+      capabilities = capabilities,
+    }
   end,
 }
 
