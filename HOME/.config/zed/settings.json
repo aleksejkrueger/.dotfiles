@@ -9,6 +9,7 @@
 {
   "diff_view_style": "split",
   "edit_predictions": {
+    "allow_data_collection": "no",
     "provider": "zed"
   },
   "terminal": {

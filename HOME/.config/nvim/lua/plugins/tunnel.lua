@@ -5,6 +5,100 @@ local defaults = {
     cell_header = "# %%",
 }
 
+local markdown_filetypes = {
+    markdown = true,
+    mkd = true,
+    rmd = true,
+}
+
+local function is_markdown_buffer()
+    return markdown_filetypes[vim.bo.filetype] == true
+end
+
+local function parse_fence(line)
+    local marker, info = line:match("^%s*(```+)%s*(.*)$")
+
+    if marker then
+        return {
+            char = "`",
+            length = #marker,
+            info = vim.trim(info or ""),
+        }
+    end
+
+    marker, info = line:match("^%s*(~~~+)%s*(.*)$")
+
+    if marker then
+        return {
+            char = "~",
+            length = #marker,
+            info = vim.trim(info or ""),
+        }
+    end
+
+    return nil
+end
+
+local function is_closing_fence(line, opening_fence)
+    local fence = parse_fence(line)
+
+    return fence ~= nil and fence.char == opening_fence.char and fence.length >= opening_fence.length
+end
+
+local function is_python_cell_info(info)
+    local normalized = info:lower()
+
+    return normalized:match("^python[%s,}]") ~= nil
+        or normalized == "python"
+        or normalized:match("^py[%s,}]") ~= nil
+        or normalized == "py"
+        or normalized:match("^ipython") ~= nil
+        or normalized:match("^%{python[%s,}]") ~= nil
+        or normalized:match("^%{code%-cell") ~= nil
+end
+
+local function markdown_code_cell_range()
+    local cursor_line = vim.fn.line(".")
+    local opening_line = nil
+    local opening_fence = nil
+
+    for line_number = 1, cursor_line do
+        local line = vim.fn.getline(line_number)
+
+        if opening_fence then
+            if is_closing_fence(line, opening_fence) then
+                opening_line = nil
+                opening_fence = nil
+            end
+        else
+            local fence = parse_fence(line)
+
+            if fence then
+                opening_line = line_number
+                opening_fence = fence
+            end
+        end
+    end
+
+    if not opening_line or not opening_fence or not is_python_cell_info(opening_fence.info) then
+        return nil
+    end
+
+    for line_number = opening_line + 1, vim.fn.line("$") do
+        if is_closing_fence(vim.fn.getline(line_number), opening_fence) then
+            return {
+                line1 = opening_line + 1,
+                line2 = line_number - 1,
+            }
+        end
+    end
+
+    return {
+        line1 = opening_line + 1,
+        line2 = vim.fn.line("$"),
+    }
+end
+
 -- Sets buffer-variables `cell_header` and `tmux_target` to values given by user via `vim.fn.input`
 local function config()
     -- cell_header
@@ -26,6 +120,11 @@ end
 --
 -- Reads `r.line1` and `r.line2`
 local function tunnell_range(r)
+    if r.line1 > r.line2 then
+        print("Empty cell.")
+        return
+    end
+
     -- load buffer with range from `r.line1` to `r.line2`
     vim.cmd("silent " .. r.line1 .. "," .. r.line2 .. ":w !tmux load-buffer - ")
 
@@ -41,6 +140,16 @@ end
 --
 -- Cursor does not have to be on the cell header, but anywhere inside the cell
 local function tunnell_cell()
+    if is_markdown_buffer() then
+        local range = markdown_code_cell_range()
+
+        if range then
+            tunnell_range(range)
+            vim.fn.search("^\\s*\\(```\\|~~~\\).*\\(python\\|py\\|ipython\\|code-cell\\)", "W")
+            return
+        end
+    end
+
     -- load cell_header
     local cell_header = vim.b.cell_header and vim.b.cell_header or defaults.cell_header
 

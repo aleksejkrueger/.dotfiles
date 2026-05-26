@@ -44,10 +44,6 @@ end
 
 patch_treesitter_directives_for_nvim_012()
 
-require('render-markdown').setup({
-  file_types = { 'markdown', 'Avante' },
-})
-
 local codex_acp_model = os.getenv("AVANTE_CODEX_MODEL") or "gpt-5.4"
 local codex_acp_reasoning_effort = os.getenv("AVANTE_CODEX_REASONING_EFFORT") or "xhigh"
 

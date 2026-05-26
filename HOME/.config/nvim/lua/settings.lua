@@ -79,10 +79,10 @@ vim.keymap.set('v', 'c', '"_c', { noremap = true })
 
 vim.cmd([[
  au FileType python set ts=4 sw=4
- au BufRead,BufNewFile *.md set ft=mkd tw=80 syntax=markdown
- au BufRead,BufNewFile *.rmd set ft=mkd tw=80 syntax=markdown
- au BufRead,BufNewFile *.ppmd set ft=mkd tw=80 syntax=markdown
- au BufRead,BufNewFile *.markdown set ft=mkd tw=80 syntax=markdown
+ au BufRead,BufNewFile *.md set ft=markdown tw=80
+ au BufRead,BufNewFile *.rmd set ft=rmd tw=80
+ au BufRead,BufNewFile *.ppmd set ft=markdown tw=80
+ au BufRead,BufNewFile *.markdown set ft=markdown tw=80
  au BufRead,BufNewFile *.slimbars set syntax=slim
 ]])
 

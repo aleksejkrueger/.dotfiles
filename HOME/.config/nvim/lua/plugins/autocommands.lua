@@ -95,6 +95,80 @@ vim.api.nvim_create_autocmd({ "FileType" }, {
   end,
 })
 
+local function set_tmux_pane_option(name, value)
+  if not vim.env.TMUX or not vim.env.TMUX_PANE or vim.fn.executable("tmux") ~= 1 then
+    return
+  end
+
+  local args = { "tmux", "set-option", "-p", "-t", vim.env.TMUX_PANE }
+
+  if value and value ~= "" then
+    vim.list_extend(args, { name, value })
+  else
+    vim.list_extend(args, { "-u", name })
+  end
+
+  vim.fn.jobstart(args, { detach = true })
+end
+
+local repl_by_extension = {
+  ipynb = "ipython",
+  ipy = "ipython",
+  py = "ipython",
+  pyi = "ipython",
+  pyw = "ipython",
+  r = "R",
+  rmd = "R",
+  lua = "lua",
+}
+
+local repl_by_filetype = {
+  python = "ipython",
+  r = "R",
+  lua = "lua",
+}
+
+local function repl_command_for_buffer(path)
+  local extension = vim.fn.fnamemodify(path, ":e"):lower()
+
+  return repl_by_extension[extension] or repl_by_filetype[vim.bo.filetype]
+end
+
+local function clear_tmux_context()
+  set_tmux_pane_option("@nvim_context_dir", nil)
+  set_tmux_pane_option("@nvim_context_command", nil)
+  set_tmux_pane_option("@nvim_ipynb_dir", nil)
+end
+
+local function sync_tmux_context()
+  local path = vim.api.nvim_buf_get_name(0)
+  local command = path ~= "" and repl_command_for_buffer(path) or nil
+
+  if path == "" or not command then
+    clear_tmux_context()
+    return
+  end
+
+  local directory = vim.fn.fnamemodify(path, ":p:h")
+
+  set_tmux_pane_option("@nvim_context_dir", directory)
+  set_tmux_pane_option("@nvim_context_command", command)
+
+  if vim.fn.fnamemodify(path, ":e"):lower() == "ipynb" then
+    set_tmux_pane_option("@nvim_ipynb_dir", directory)
+  else
+    set_tmux_pane_option("@nvim_ipynb_dir", nil)
+  end
+end
+
+vim.api.nvim_create_autocmd({ "BufEnter", "BufFilePost", "FileType" }, {
+  callback = sync_tmux_context,
+})
+
+vim.api.nvim_create_autocmd({ "VimLeavePre" }, {
+  callback = clear_tmux_context,
+})
+
 vim.api.nvim_create_autocmd({ "FileType" }, {
   pattern = { "lir" },
   callback = function()
