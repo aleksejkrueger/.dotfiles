@@ -63,9 +63,6 @@ setopt HIST_IGNORE_ALL_DUPS
 setopt HIST_REDUCE_BLANKS
 setopt SHARE_HISTORY
 
-bindkey "^[[1~" beginning-of-line
-bindkey "^[[4~" end-of-line
-
 source "$DOTFILES/HOME/.zsh/functions.zsh"
 
 export ZINIT_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/zinit/zinit.git"
@@ -115,6 +112,14 @@ if [[ -r "$ZINIT_HOME/zinit.zsh" ]]; then
   zinit ice depth=1 pick"zsh-syntax-highlighting.zsh"
   zinit light zsh-users/zsh-syntax-highlighting
 fi
+
+# Keep prompt navigation working after vi-mode switches the active zle keymap.
+for keymap in emacs viins; do
+  bindkey -M "$keymap" "^[[1~" beginning-of-line
+  bindkey -M "$keymap" "^[[4~" end-of-line
+  bindkey -M "$keymap" "^[[1;5D" beginning-of-line
+  bindkey -M "$keymap" "^[[1;5C" end-of-line
+done
 
 if (( $+commands[pyenv] )); then
   eval "$(pyenv init - zsh)"

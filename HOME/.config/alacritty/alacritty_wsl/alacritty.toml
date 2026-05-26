@@ -180,12 +180,12 @@ key = "J"
 mods = "Alt"
 
 [[keyboard.bindings]]
-chars = "\u0006p"
+chars = "\u001B[1;5D"
 key = "Left"
 mods = "Control"
 
 [[keyboard.bindings]]
-chars = "\u0006n"
+chars = "\u001B[1;5C"
 key = "Right"
 mods = "Control"
 

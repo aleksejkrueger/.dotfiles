@@ -143,12 +143,12 @@ key = 22
 mods = "Alt"
 
 [[keyboard.bindings]]
-chars = "\u0002\u001B[D"
+chars = "\u001B[1;5D"
 key = "Left"
 mods = "Control"
 
 [[keyboard.bindings]]
-chars = "\u0002\u001B[C"
+chars = "\u001B[1;5C"
 key = "Right"
 mods = "Control"
 
