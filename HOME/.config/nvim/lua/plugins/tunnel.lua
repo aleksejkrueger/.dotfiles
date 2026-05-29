@@ -66,6 +66,10 @@ local function tmux_pane_option(name)
     return output
 end
 
+local function context_command()
+    return tmux_pane_option("@nvim_context_command")
+end
+
 local function target_pane()
     if vim.b.tmux_target and vim.b.tmux_target ~= "" then
         return vim.b.tmux_target
@@ -162,25 +166,64 @@ del __nvim_tmux_vars_snapshot
     return "exec(" .. vim.fn.json_encode(source) .. ")"
 end
 
+local function r_snapshot_source(vars_file)
+    local hook_path = vim.fn.expand("~/.dotfiles/src/repl-vars-hook.R")
+    local source = ([[
+Sys.setenv(NVIM_TMUX_VARS_FILE = %s, NVIM_TMUX_R_HOOK_FILE = %s)
+if (!nzchar(Sys.getenv("NVIM_TMUX_R_PROFILE_USER", ""))) {
+  Sys.setenv(NVIM_TMUX_R_PROFILE_USER = "__nvim_tmux_no_profile__")
+}
+if (!exists(".nvim_tmux_write_vars_snapshot", envir = .GlobalEnv, mode = "function") && file.exists(%s)) {
+  source(%s, local = .GlobalEnv)
+}
+if (exists(".nvim_tmux_write_vars_snapshot", envir = .GlobalEnv, mode = "function")) {
+  .nvim_tmux_write_vars_snapshot()
+}
+]]):format(
+        vim.fn.json_encode(vars_file),
+        vim.fn.json_encode(hook_path),
+        vim.fn.json_encode(hook_path),
+        vim.fn.json_encode(hook_path)
+    )
+
+    return source
+end
+
 local function is_python_context()
-    local context_command = tmux_pane_option("@nvim_context_command")
     local extension = vim.fn.expand("%:e"):lower()
 
-    return context_command == "ipython"
+    return context_command() == "ipython"
         or vim.bo.filetype == "python"
         or extension == "py"
         or extension == "ipy"
         or extension == "ipynb"
 end
 
-local function refresh_python_vars(target)
+local function is_r_context()
+    local extension = vim.fn.expand("%:e"):lower()
+
+    return context_command() == "R"
+        or vim.bo.filetype == "r"
+        or vim.bo.filetype == "rmd"
+        or extension == "r"
+        or extension == "rmd"
+end
+
+local function refresh_repl_vars(target)
     local vars_file = tmux_pane_option("@nvim_vars_file")
 
-    if not vars_file or not is_python_context() then
+    if not vars_file then
         return
     end
 
-    if paste_text(target, python_snapshot_source(vars_file), "vars") then
+    local source = nil
+    if is_r_context() then
+        source = r_snapshot_source(vars_file)
+    elseif is_python_context() then
+        source = python_snapshot_source(vars_file)
+    end
+
+    if source and paste_text(target, source, "vars") then
         send_enter(target)
     end
 end
@@ -227,6 +270,26 @@ local function is_python_cell_info(info)
         or normalized:match("^%{code%-cell") ~= nil
 end
 
+local function is_r_cell_info(info)
+    local normalized = info:lower()
+
+    return normalized == "r"
+        or normalized:match("^r[%s,}]") ~= nil
+        or normalized:match("^%{r[%s,}]") ~= nil
+end
+
+local function is_current_cell_info(info)
+    if is_r_context() then
+        return is_r_cell_info(info)
+    end
+
+    if is_python_context() then
+        return is_python_cell_info(info)
+    end
+
+    return is_python_cell_info(info) or is_r_cell_info(info)
+end
+
 local function markdown_code_cell_range()
     local cursor_line = vim.fn.line(".")
     local opening_line = nil
@@ -250,7 +313,7 @@ local function markdown_code_cell_range()
         end
     end
 
-    if not opening_line or not opening_fence or not is_python_cell_info(opening_fence.info) then
+    if not opening_line or not opening_fence or not is_current_cell_info(opening_fence.info) then
         return nil
     end
 
@@ -312,7 +375,7 @@ local function tunnell_cell()
 
         if range then
             tunnell_range(range)
-            vim.fn.search("^\\s*\\(```\\|~~~\\).*\\(python\\|py\\|ipython\\|code-cell\\)", "W")
+            vim.fn.search("^\\s*\\(```\\|~~~\\)", "W")
             return
         end
     end
@@ -361,7 +424,7 @@ end, {})
 vim.api.nvim_create_user_command("TunnellRange", tunnell_range, { range = true })
 vim.api.nvim_create_user_command("TunnellCell", tunnell_cell, {})
 vim.api.nvim_create_user_command("TunnellVars", function()
-    refresh_python_vars(target_pane())
+    refresh_repl_vars(target_pane())
 end, {})
 
 -- Setup function for users to call from their plugin managers

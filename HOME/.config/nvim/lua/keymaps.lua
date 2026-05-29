@@ -158,6 +158,7 @@ keymap('n', '<leader>db', ':DapToggleBreakpoint <CR>', { noremap = true, silent 
 keymap('n', '<leader>dpr', ':lua require("dap-python").test_method()<CR>', { noremap = true, silent = true })
 
 vim.keymap.set("n", "<leader>zz", ":TunnellCell<CR>", { silent = true, desc = "Tunnel cell" })
+vim.keymap.set("v", "<leader>zz", ":TunnellRange<CR>", { silent = true, desc = "Tunnel selection" })
 vim.keymap.set("n", "<leader>zv", ":TunnellVars<CR>", { silent = true, desc = "Refresh REPL vars" })
 vim.keymap.set("n", "<leader>ci", ":CodexInsert<CR>", { silent = true, desc = "Insert Codex reply at cursor" })
 vim.keymap.set("v", "<leader>ci", ":CodexInsert<CR>", { silent = true, desc = "Send selection to Codex and insert reply" })

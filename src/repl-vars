@@ -4,11 +4,12 @@ from __future__ import annotations
 import argparse
 import curses
 import json
+import keyword
 import shlex
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,11 @@ class ViewState:
     """Mutable state for the variable browser."""
 
     variables: list[ReplVariable]
+    watched_names: set[str] = field(default_factory=set)
+    variable_signatures: dict[str, str] = field(default_factory=dict)
+    changed_until: dict[str, float] = field(default_factory=dict)
+    pending_delete_name: str = ""
+    pending_delete_until: float = 0.0
     selected: int = 0
     offset: int = 0
     updated_at: str = ""
@@ -63,6 +69,31 @@ COLOR_DETAIL = 5
 COLOR_FOOTER = 6
 COLOR_SELECTED = 7
 COLOR_MESSAGE = 8
+COLOR_WATCH = 9
+COLOR_CHANGED = 10
+CHANGE_HIGHLIGHT_SECONDS = 2.5
+DELETE_CONFIRM_SECONDS = 3.0
+R_RESERVED_WORDS = {
+    "FALSE",
+    "Inf",
+    "NA",
+    "NA_character_",
+    "NA_complex_",
+    "NA_integer_",
+    "NA_real_",
+    "NULL",
+    "NaN",
+    "TRUE",
+    "break",
+    "else",
+    "for",
+    "function",
+    "if",
+    "in",
+    "next",
+    "repeat",
+    "while",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,6 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Browse exported REPL variables in tmux.")
     parser.add_argument("--vars-file", required=True, type=Path)
     parser.add_argument("--target-pane", required=True)
+    parser.add_argument("--language", choices=("python", "r"), default="python")
     parser.add_argument("--refresh-seconds", default=0.5, type=float)
     return parser.parse_args()
 
@@ -111,6 +143,8 @@ def init_colors(window: curses.window) -> None:
     curses.init_pair(COLOR_FOOTER, curses.COLOR_BLUE, -1)
     curses.init_pair(COLOR_SELECTED, curses.COLOR_BLACK, curses.COLOR_CYAN)
     curses.init_pair(COLOR_MESSAGE, curses.COLOR_YELLOW, -1)
+    curses.init_pair(COLOR_WATCH, curses.COLOR_YELLOW, -1)
+    curses.init_pair(COLOR_CHANGED, curses.COLOR_BLACK, curses.COLOR_YELLOW)
 
 
 def color(number: int, attr: int = 0) -> int:
@@ -209,6 +243,34 @@ def variable_value(variable: ReplVariable, column: TableColumn) -> str:
     return getattr(variable, column.field)
 
 
+def variable_signature(variable: ReplVariable) -> str:
+    """Return a compact signature used to detect displayed value changes."""
+
+    return "\0".join((variable.type_name, variable.detail, variable.value))
+
+
+def visible_name(variable: ReplVariable, watched_names: set[str]) -> str:
+    """Return a variable name with a watch marker when needed."""
+
+    if variable.name in watched_names:
+        return f"* {variable.name}"
+    return variable.name
+
+
+def display_value(variable: ReplVariable, column: TableColumn, watched_names: set[str]) -> str:
+    """Return a table display value for a variable column."""
+
+    if column.field == "name":
+        return visible_name(variable, watched_names)
+    return variable_value(variable, column)
+
+
+def display_values(variable: ReplVariable, watched_names: set[str]) -> list[str]:
+    """Return all table display values for a variable."""
+
+    return [display_value(variable, column, watched_names) for column in TABLE_COLUMNS]
+
+
 def table_row(values: list[str], widths: list[int]) -> str:
     """Render a complete table row from cell values."""
 
@@ -230,13 +292,10 @@ def divider_row(widths: list[int]) -> str:
     return TABLE_DIVIDER.join("-" * width for width in widths)
 
 
-def variable_row(variable: ReplVariable, widths: list[int]) -> str:
+def variable_row(variable: ReplVariable, widths: list[int], watched_names: set[str]) -> str:
     """Render one variable as a table row."""
 
-    return table_row(
-        [variable_value(variable, column) for column in TABLE_COLUMNS],
-        widths,
-    )
+    return table_row(display_values(variable, watched_names), widths)
 
 
 def load_variables(path: Path) -> tuple[list[ReplVariable], str, str]:
@@ -264,6 +323,212 @@ def load_variables(path: Path) -> tuple[list[ReplVariable], str, str]:
     ]
     message = text_value(payload.get("message"))
     return variables, text_value(payload.get("updated_at")), message
+
+
+def selected_name(state: ViewState) -> str:
+    """Return the currently selected variable name, if any."""
+
+    if not state.variables:
+        return ""
+    if not 0 <= state.selected < len(state.variables):
+        return ""
+    return state.variables[state.selected].name
+
+
+def ordered_variables(variables: list[ReplVariable], watched_names: set[str]) -> list[ReplVariable]:
+    """Return variables with watched names pinned to the top."""
+
+    watched = [variable for variable in variables if variable.name in watched_names]
+    regular = [variable for variable in variables if variable.name not in watched_names]
+    return watched + regular
+
+
+def index_of_name(variables: list[ReplVariable], name: str) -> int | None:
+    """Return the index of a variable name in a variable list."""
+
+    for index, variable in enumerate(variables):
+        if variable.name == name:
+            return index
+    return None
+
+
+def cleanup_change_marks(state: ViewState, now: float) -> None:
+    """Remove expired or unwatched change markers."""
+
+    state.changed_until = {
+        name: expires_at
+        for name, expires_at in state.changed_until.items()
+        if name in state.watched_names and expires_at > now
+    }
+
+
+def cleanup_pending_delete(state: ViewState, now: float) -> None:
+    """Clear an expired pending delete confirmation."""
+
+    if state.pending_delete_name and state.pending_delete_until <= now:
+        if state.message == f"Press d again to delete {state.pending_delete_name}":
+            state.message = ""
+        state.pending_delete_name = ""
+        state.pending_delete_until = 0.0
+
+
+def refresh_watch_signatures(state: ViewState, variables: list[ReplVariable], now: float) -> None:
+    """Update watched variable signatures and mark changed watched values."""
+
+    for variable in variables:
+        if variable.name not in state.watched_names:
+            continue
+
+        signature = variable_signature(variable)
+        previous_signature = state.variable_signatures.get(variable.name)
+        if previous_signature is not None and previous_signature != signature:
+            state.changed_until[variable.name] = now + CHANGE_HIGHLIGHT_SECONDS
+        state.variable_signatures[variable.name] = signature
+
+    cleanup_change_marks(state, now)
+
+
+def update_variables(
+    state: ViewState,
+    variables: list[ReplVariable],
+    updated_at: str,
+    message: str,
+    now: float,
+    height: int,
+) -> None:
+    """Apply a fresh snapshot while preserving selection and watch ordering."""
+
+    name = selected_name(state)
+    refresh_watch_signatures(state, variables, now)
+    state.variables = ordered_variables(variables, state.watched_names)
+    state.updated_at = updated_at
+    if message:
+        state.message = message
+
+    selected_index = index_of_name(state.variables, name)
+    if selected_index is not None:
+        state.selected = selected_index
+    clamp_state(state, height)
+
+
+def toggle_watch(state: ViewState, now: float) -> None:
+    """Toggle the selected variable in the watch list."""
+
+    if not state.variables:
+        state.message = "No variable to watch."
+        return
+
+    variable = state.variables[state.selected]
+    if variable.name in state.watched_names:
+        state.watched_names.remove(variable.name)
+        state.variable_signatures.pop(variable.name, None)
+        state.changed_until.pop(variable.name, None)
+        state.message = f"Unwatched {variable.name}"
+    else:
+        state.watched_names.add(variable.name)
+        state.variable_signatures[variable.name] = variable_signature(variable)
+        state.message = f"Watching {variable.name}"
+
+    state.variables = ordered_variables(state.variables, state.watched_names)
+    selected_index = index_of_name(state.variables, variable.name)
+    if selected_index is not None:
+        state.selected = selected_index
+    cleanup_change_marks(state, now)
+
+
+def python_reference(name: str) -> str:
+    """Return a Python expression that references a variable name."""
+
+    if name.isidentifier() and not keyword.iskeyword(name):
+        return name
+    return f"globals()[{name!r}]"
+
+
+def is_r_identifier(name: str) -> bool:
+    """Return whether a name can be referenced directly in R code."""
+
+    if not name or name in R_RESERVED_WORDS:
+        return False
+
+    first = name[0]
+    if first == ".":
+        if len(name) > 1 and name[1].isdigit():
+            return False
+    elif not first.isalpha():
+        return False
+
+    return all(character.isalnum() or character in "._" for character in name[1:])
+
+
+def r_string(value: str) -> str:
+    """Return a double-quoted R string literal."""
+
+    return json.dumps(value)
+
+
+def r_reference(name: str) -> str:
+    """Return an R expression that references a variable name."""
+
+    if is_r_identifier(name):
+        return name
+    escaped_name = name.replace("\\", "\\\\").replace("`", "\\`")
+    return f"`{escaped_name}`"
+
+
+def variable_reference(name: str, language: str) -> str:
+    """Return a language-specific expression that references a variable."""
+
+    if language == "r":
+        return r_reference(name)
+    return python_reference(name)
+
+
+def print_expression(name: str, language: str) -> str:
+    """Return language-specific code that prints a variable."""
+
+    return f"print({variable_reference(name, language)})"
+
+
+def delete_expression(name: str, language: str) -> str:
+    """Return language-specific code that deletes a variable."""
+
+    if language == "r":
+        return f"rm(list = {r_string(name)}, envir = .GlobalEnv)"
+    if name.isidentifier() and not keyword.iskeyword(name):
+        return f"del {name}"
+    return f"_ = globals().pop({name!r}, None)"
+
+
+def forget_variable_state(state: ViewState, name: str) -> None:
+    """Remove UI state associated with a deleted variable."""
+
+    state.watched_names.discard(name)
+    state.variable_signatures.pop(name, None)
+    state.changed_until.pop(name, None)
+    state.pending_delete_name = ""
+    state.pending_delete_until = 0.0
+
+
+def delete_selected(state: ViewState, target_pane: str, now: float, language: str) -> None:
+    """Delete the selected variable after a short second-key confirmation."""
+
+    if not state.variables:
+        state.message = "No variable to delete."
+        return
+
+    variable = state.variables[state.selected]
+    confirmed = state.pending_delete_name == variable.name and state.pending_delete_until > now
+    if not confirmed:
+        state.pending_delete_name = variable.name
+        state.pending_delete_until = now + DELETE_CONFIRM_SECONDS
+        state.message = f"Press d again to delete {variable.name}"
+        return
+
+    state.message = send_text(target_pane, delete_expression(variable.name, language), submit=True)
+    if state.message.startswith("Pasted "):
+        state.message = f"Deleted {variable.name}"
+        forget_variable_state(state, variable.name)
+        state.variables = [item for item in state.variables if item.name != variable.name]
 
 
 def send_text(target_pane: str, text: str, submit: bool = False) -> str:
@@ -400,21 +665,43 @@ def draw_row(
     widths: list[int],
     width: int,
     selected: bool,
+    watched: bool,
+    changed: bool,
 ) -> None:
     """Draw one variable row."""
 
     if selected:
-        draw_text(window, y, 0, " " * width, color(COLOR_SELECTED))
-        draw_text(window, y, 0, truncate(variable_row(variable, widths), width), color(COLOR_SELECTED))
+        selected_attr = color(COLOR_CHANGED, curses.A_BOLD) if changed else color(COLOR_SELECTED)
+        watched_names = {variable.name} if watched else set()
+        draw_text(window, y, 0, " " * width, selected_attr)
+        draw_text(
+            window,
+            y,
+            0,
+            truncate(variable_row(variable, widths, watched_names), width),
+            selected_attr,
+        )
+        return
+
+    if changed:
+        changed_attr = color(COLOR_CHANGED, curses.A_BOLD)
+        draw_text(window, y, 0, " " * width, changed_attr)
+        draw_text(
+            window,
+            y,
+            0,
+            truncate(variable_row(variable, widths, {variable.name}), width),
+            changed_attr,
+        )
         return
 
     draw_colored_row(
         window,
         y,
-        [variable_value(variable, column) for column in TABLE_COLUMNS],
+        display_values(variable, {variable.name} if watched else set()),
         widths,
         [
-            color(COLOR_NAME),
+            color(COLOR_WATCH, curses.A_BOLD) if watched else color(COLOR_NAME),
             color(COLOR_TYPE),
             color(COLOR_DETAIL),
             0,
@@ -443,17 +730,30 @@ def draw(window: curses.window, state: ViewState) -> None:
     draw_text(window, 1, 0, truncate(divider_row(widths), width), color(COLOR_DIVIDER, curses.A_DIM))
 
     visible_rows = visible_row_count(height)
+    now = time.monotonic()
+    cleanup_change_marks(state, now)
+    cleanup_pending_delete(state, now)
     if state.variables:
         visible_indexes = range(
             state.offset,
             min(len(state.variables), state.offset + visible_rows),
         )
         for screen_row, index in enumerate(visible_indexes):
-            draw_row(window, screen_row + 2, state.variables[index], widths, width, index == state.selected)
+            variable = state.variables[index]
+            draw_row(
+                window,
+                screen_row + 2,
+                variable,
+                widths,
+                width,
+                index == state.selected,
+                variable.name in state.watched_names,
+                state.changed_until.get(variable.name, 0.0) > now,
+            )
     else:
         draw_text(window, 2, 0, truncate(state.message or "No variables exported yet.", width), color(COLOR_MESSAGE))
 
-    footer = "Click: select  Enter: run  o: open  p: print  y: copy  q: quit"
+    footer = "Click: select  Enter: run  w: watch  d: del  o: open  p: print  y: copy"
     if state.message and state.variables:
         footer = state.message
     draw_text(window, height - 1, 0, truncate(footer, width), color(COLOR_FOOTER, curses.A_DIM))
@@ -463,6 +763,7 @@ def draw(window: curses.window, state: ViewState) -> None:
 def send_selected(
     state: ViewState,
     target_pane: str,
+    language: str,
     expression: str | None = None,
     submit: bool = False,
 ) -> None:
@@ -473,7 +774,11 @@ def send_selected(
         return
 
     variable = state.variables[state.selected]
-    state.message = send_text(target_pane, expression or variable.name, submit)
+    state.message = send_text(
+        target_pane,
+        expression or variable_reference(variable.name, language),
+        submit,
+    )
 
 
 def handle_mouse(state: ViewState, target_pane: str, height: int) -> None:
@@ -501,11 +806,16 @@ def handle_mouse(state: ViewState, target_pane: str, height: int) -> None:
             clamp_state(state, height)
 
 
-def handle_key(key: int, state: ViewState, target_pane: str, height: int) -> bool:
+def handle_key(
+    key: int,
+    state: ViewState,
+    target_pane: str,
+    height: int,
+    now: float,
+    language: str,
+) -> bool:
     """Handle one keyboard or mouse event."""
 
-    if key in (ord("q"), 27):
-        return False
     if key == curses.KEY_MOUSE:
         handle_mouse(state, target_pane, height)
     elif key in (curses.KEY_UP, ord("k")):
@@ -517,11 +827,16 @@ def handle_key(key: int, state: ViewState, target_pane: str, height: int) -> boo
     elif key == curses.KEY_NPAGE:
         state.selected += max(1, height - 5)
     elif key in (10, 13):
-        send_selected(state, target_pane, submit=True)
+        send_selected(state, target_pane, language, submit=True)
     elif key == ord("p") and state.variables:
-        send_selected(state, target_pane, f"print({state.variables[state.selected].name})", True)
+        expression = print_expression(state.variables[state.selected].name, language)
+        send_selected(state, target_pane, language, expression, True)
     elif key == ord("o") and state.variables:
         state.message = open_viewer(state.variables[state.selected])
+    elif key == ord("w"):
+        toggle_watch(state, now)
+    elif key == ord("d"):
+        delete_selected(state, target_pane, now, language)
     elif key == ord("y") and state.variables:
         state.message = copy_text(state.variables[state.selected].name)
 
@@ -547,18 +862,14 @@ def run(window: curses.window, args: argparse.Namespace) -> None:
 
         if now - last_load >= args.refresh_seconds:
             variables, updated_at, message = load_variables(args.vars_file)
-            state.variables = variables
-            state.updated_at = updated_at
-            if message:
-                state.message = message
-            clamp_state(state, height)
+            update_variables(state, variables, updated_at, message, now, height)
             last_load = now
 
         draw(window, state)
         key = window.getch()
         if key == -1:
             continue
-        if not handle_key(key, state, args.target_pane, height):
+        if not handle_key(key, state, args.target_pane, height, time.monotonic(), args.language):
             break
 
 
