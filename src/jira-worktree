@@ -480,9 +480,11 @@ ensure_worktree() {
 
   if in_repo git show-ref --verify --quiet "refs/heads/$branch"; then
     in_repo git worktree add "$branch_path" "$branch" >&2
+
   elif in_repo git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-    in_repo git fetch origin "$branch:$branch" >&2
-    in_repo git worktree add "$branch_path" "$branch" >&2
+    in_repo git fetch origin "$branch" >&2
+    in_repo git worktree add -b "$branch" "$branch_path" "origin/$branch" >&2
+
   else
     in_repo git worktree add -b "$branch" "$branch_path" main >&2
   fi
