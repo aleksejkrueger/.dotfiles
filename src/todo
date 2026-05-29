@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+die() {
+  printf 'todo: %s\n' "$*" >&2
+  exit 1
+}
+
+main() {
+  if [[ "$#" -eq 0 ]]; then
+    die 'usage: todo "text"'
+  fi
+
+  local notes_dir="${NOTES:-$HOME/notes/vimwiki}"
+  local note_file
+  local text="$*"
+
+  note_file="$notes_dir/$(date +%F).md"
+
+  mkdir -p "$notes_dir"
+  printf '#todo "%s"\n' "$text" >> "$note_file"
+}
+
+main "$@"

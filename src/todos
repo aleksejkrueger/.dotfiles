@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""Show Obsidian-style #todo tag matches from vimwiki notes in fzf."""
+
+from __future__ import annotations
+
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Sequence
+
+
+DEFAULT_TAG = "todo"
+TAG_RE = re.compile(r"(^| )#(?P<tag>[\w/-]+)", re.UNICODE)
+HTML_COMMENT_RE = re.compile(r"<!--.*-->")
+HEX_COLOR_RE = re.compile(r"[0-9a-f]{3}([0-9a-f]{3})?", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class TagMatch:
+    """A single matched tag location inside a note."""
+
+    path: Path
+    line: int
+    text: str
+    tag: str
+
+
+def die(message: str) -> int:
+    """Print an error message and return a failing exit code."""
+    print(f"todos: {message}", file=sys.stderr)
+    return 1
+
+
+def notes_dir() -> Path:
+    """Return the configured notes directory."""
+    return Path(os.environ.get("NOTES", Path.home() / "notes" / "vimwiki")).expanduser()
+
+
+def normalize_tag(tag: str) -> str:
+    """Normalize an Obsidian tag for matching."""
+    normalized = tag.strip().lower()
+    while normalized.startswith("#"):
+        normalized = normalized[1:]
+    return normalized
+
+
+def tag_matches(query_tag: str, tag: str) -> bool:
+    """Return whether a tag matches Obsidian's exact-or-subtag query semantics."""
+    normalized_query = normalize_tag(query_tag)
+    normalized_tag = normalize_tag(tag)
+    return normalized_tag == normalized_query or normalized_tag.startswith(f"{normalized_query}/")
+
+
+def is_inline_tag(tag: str) -> bool:
+    """Return whether an inline tag body is a real Obsidian tag."""
+    if tag.isdigit() or HEX_COLOR_RE.fullmatch(tag):
+        return False
+    return True
+
+
+def strip_yaml_value(value: str) -> str:
+    """Trim YAML list markers, comments, and simple quotes from a scalar value."""
+    value = value.strip()
+    if " #" in value:
+        value = value.split(" #", 1)[0].strip()
+    return value.strip("'\" ")
+
+
+def parse_yaml_list(value: str) -> list[str]:
+    """Parse the small YAML list subset used by Obsidian frontmatter tags."""
+    value = value.strip()
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+        return [tag for item in value.split(",") if (tag := strip_yaml_value(item))]
+    return [tag] if (tag := strip_yaml_value(value)) else []
+
+
+def frontmatter_end(lines: Sequence[str]) -> int | None:
+    """Return the 0-based closing line index for top-of-file YAML frontmatter."""
+    if not lines or lines[0].strip() != "---":
+        return None
+
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() in {"---", "..."}:
+            return index
+
+    return None
+
+
+def frontmatter_tag_matches(path: Path, lines: Sequence[str], query_tag: str) -> list[TagMatch]:
+    """Return matching tag locations from YAML frontmatter."""
+    end = frontmatter_end(lines)
+    if end is None:
+        return []
+
+    matches: list[TagMatch] = []
+    in_tags = False
+
+    for index, line in enumerate(lines[1:end], start=2):
+        text = line.strip()
+        tags: list[str] = []
+
+        if text.startswith("tags:"):
+            in_tags = True
+            tags = parse_yaml_list(text.split(":", 1)[1])
+        elif in_tags and text.startswith("- "):
+            tags = parse_yaml_list(text[2:])
+        elif text:
+            in_tags = False
+
+        for tag in tags:
+            if tag_matches(query_tag, tag):
+                matches.append(TagMatch(path=path, line=index, text=text, tag=tag))
+
+    return matches
+
+
+def code_block_lines(lines: Sequence[str]) -> set[int]:
+    """Return 1-based line numbers inside fenced Markdown code blocks."""
+    blocked: set[int] = set()
+    start: int | None = None
+
+    for index, line in enumerate(lines, start=1):
+        if re.match(r"^\s*```.*```\s*$", line):
+            blocked.add(index)
+            start = None
+        elif re.match(r"^\s*```", line):
+            if start is None:
+                start = index
+            else:
+                blocked.update(range(start, index + 1))
+                start = None
+
+    return blocked
+
+
+def inline_tag_matches(path: Path, lines: Sequence[str], query_tag: str) -> list[TagMatch]:
+    """Return matching inline tag locations outside frontmatter and code blocks."""
+    matches: list[TagMatch] = []
+    frontmatter_stop = frontmatter_end(lines)
+    blocked = code_block_lines(lines)
+
+    for index, raw_line in enumerate(lines, start=1):
+        if frontmatter_stop is not None and index <= frontmatter_stop + 1:
+            continue
+        if index in blocked:
+            continue
+
+        text = raw_line.strip()
+        if not text or HTML_COMMENT_RE.search(text):
+            continue
+
+        for match in TAG_RE.finditer(text):
+            tag = match.group("tag")
+            if is_inline_tag(tag) and tag_matches(query_tag, tag):
+                matches.append(TagMatch(path=path, line=index, text=text, tag=tag))
+
+    return matches
+
+
+def markdown_files(root: Path) -> Iterable[Path]:
+    """Yield Markdown notes in stable path order."""
+    yield from sorted(path for path in root.rglob("*.md") if path.is_file())
+
+
+def find_tag_matches(root: Path, query_tag: str = DEFAULT_TAG) -> list[TagMatch]:
+    """Find Obsidian-style tag matches below a notes directory."""
+    matches: list[TagMatch] = []
+
+    if not root.exists():
+        return matches
+
+    for path in markdown_files(root):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        file_matches = frontmatter_tag_matches(path, lines, query_tag)
+        file_matches.extend(inline_tag_matches(path, lines, query_tag))
+        matches.extend(sorted(file_matches, key=lambda item: item.line))
+
+    return matches
+
+
+def display_name(path: Path) -> str:
+    """Return the default note display name used in fzf results."""
+    return path.stem
+
+
+def fzf_row(match: TagMatch) -> str:
+    """Return one tab-delimited fzf row with visible and hidden fields."""
+    visible = f"{display_name(match.path)} [{match.line}] {match.text.replace(chr(9), ' ')}"
+    return "\t".join((visible, str(match.path), str(match.line)))
+
+
+def fzf_command() -> list[str]:
+    """Build the fzf command used to pick a todo location."""
+    preview = "bat --style=numbers --color=always --highlight-line {3} --line-range :500 {2} 2>/dev/null || sed -n '1,200p' {2}"
+    return [
+        "fzf",
+        "--delimiter",
+        "\t",
+        "--with-nth",
+        "1",
+        "--prompt",
+        "Todos: ",
+        "--preview",
+        preview,
+    ]
+
+
+def pick_match(matches: Sequence[TagMatch]) -> TagMatch | None:
+    """Show matches in fzf and return the selected tag location."""
+    completed = subprocess.run(
+        fzf_command(),
+        input="\n".join(fzf_row(match) for match in matches),
+        stdout=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return None
+
+    fields = completed.stdout.rstrip("\n").split("\t")
+    if len(fields) < 3:
+        return None
+
+    return TagMatch(path=Path(fields[1]), line=int(fields[2]), text=fields[0], tag=DEFAULT_TAG)
+
+
+def editor_command(match: TagMatch) -> list[str]:
+    """Return the editor command for opening a selected tag match."""
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nvim"
+    return [*shlex.split(editor), f"+{match.line}", str(match.path)]
+
+
+def open_match(match: TagMatch) -> int:
+    """Open a selected match in the configured editor."""
+    return subprocess.call(editor_command(match))
+
+
+def main() -> int:
+    """Run the todos command."""
+    if shutil.which("fzf") is None:
+        return die("missing dependency: fzf")
+
+    matches = find_tag_matches(notes_dir())
+    if not matches:
+        print("todos: no #todo tags found", file=sys.stderr)
+        return 0
+
+    match = pick_match(matches)
+    if match is None:
+        return 0
+
+    return open_match(match)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
