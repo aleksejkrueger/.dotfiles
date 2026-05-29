@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
 WORK_CONFIG="${WORK_CONFIG:-$HOME/.work/work.zsh}"
