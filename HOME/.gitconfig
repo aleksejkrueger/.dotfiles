@@ -40,9 +40,3 @@
       exit 1; \
     fi; \
   }; f"
-
-[core]
-	attributesfile = ~/.dotfiles/HOME/.config/git/attributes
-[filter "reviewignore"]
-	smudge = cat
-	clean = "sed -e '/^[[:space:]]*#r[e]view[[:space:]]*$/d'"
