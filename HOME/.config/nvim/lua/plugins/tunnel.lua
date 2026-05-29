@@ -15,6 +15,176 @@ local function is_markdown_buffer()
     return markdown_filetypes[vim.bo.filetype] == true
 end
 
+local function tmux_buffer_name(suffix)
+    local pane = vim.env.TMUX_PANE or "nvim"
+
+    return ("nvim_tunnel_%s_%s"):format(pane:gsub("[^%w_%-]", "_"), suffix)
+end
+
+local function tmux_system(args, input)
+    if vim.fn.executable("tmux") ~= 1 then
+        print("tmux is not executable.")
+        return false, ""
+    end
+
+    local output = vim.fn.system(args, input)
+
+    if vim.v.shell_error ~= 0 then
+        print(vim.trim(output))
+        return false, output
+    end
+
+    return true, output
+end
+
+local function tmux_pane_option(name)
+    if not vim.env.TMUX or not vim.env.TMUX_PANE then
+        return nil
+    end
+
+    local ok, output = tmux_system({
+        "tmux",
+        "display-message",
+        "-p",
+        "-t",
+        vim.env.TMUX_PANE,
+        "#{"
+            .. name
+            .. "}",
+    })
+
+    if not ok then
+        return nil
+    end
+
+    output = vim.trim(output)
+
+    if output == "" then
+        return nil
+    end
+
+    return output
+end
+
+local function target_pane()
+    if vim.b.tmux_target and vim.b.tmux_target ~= "" then
+        return vim.b.tmux_target
+    end
+
+    return tmux_pane_option("@nvim_repl_pane") or defaults.tmux_target
+end
+
+local function paste_text(target, text, suffix)
+    local buffer_name = tmux_buffer_name(suffix)
+    local ok = tmux_system({ "tmux", "load-buffer", "-b", buffer_name, "-" }, text)
+
+    if not ok then
+        return false
+    end
+
+    ok = tmux_system({ "tmux", "paste-buffer", "-dpr", "-b", buffer_name, "-t", target })
+
+    return ok
+end
+
+local function send_enter(target)
+    local ok = tmux_system({ "tmux", "send-keys", "-t", target, "Enter" })
+
+    return ok
+end
+
+local function python_snapshot_source(vars_file)
+    local source = ([[
+def __nvim_tmux_vars_snapshot(__nvim_tmux_vars_path):
+    import datetime as __datetime
+    import inspect as __inspect
+    import types as __types
+    import json as __json
+    import os as __os
+
+    def __short_text(__value, __limit=120):
+        try:
+            __text = repr(__value)
+        except Exception as __error:
+            __text = "<repr failed: " + type(__error).__name__ + ">"
+        __text = " ".join(str(__text).split())
+        if len(__text) > __limit:
+            return __text[:__limit - 1] + "."
+        return __text
+
+    def __detail_text(__value):
+        __shape = getattr(__value, "shape", None)
+        if __shape is not None:
+            return "shape=" + repr(__shape)
+        try:
+            return "len=" + str(len(__value))
+        except Exception:
+            return ""
+
+    __excluded_names = {"In", "Out", "exit", "quit", "get_ipython"}
+    __excluded_prefixes = ("__nvim", "_nvim", "_dh", "_i", "_ih", "_ii", "_iii", "_oh", "_sh")
+    __items = []
+
+    for __name, __value in sorted(globals().items()):
+        if __name in __excluded_names or __name.startswith("_"):
+            continue
+        if __name.startswith(__excluded_prefixes):
+            continue
+        if (
+            isinstance(__value, __types.ModuleType)
+            or __inspect.isfunction(__value)
+            or __inspect.ismethod(__value)
+            or __inspect.isbuiltin(__value)
+        ):
+            continue
+        __items.append({
+            "name": __name,
+            "type": type(__value).__name__,
+            "detail": __detail_text(__value),
+            "value": __short_text(__value),
+        })
+
+    __payload = {
+        "updated_at": __datetime.datetime.now().strftime("%%H:%%M:%%S"),
+        "vars": __items,
+    }
+    __tmp_path = __nvim_tmux_vars_path + ".tmp"
+
+    with open(__tmp_path, "w", encoding="utf-8") as __handle:
+        __json.dump(__payload, __handle)
+
+    __os.replace(__tmp_path, __nvim_tmux_vars_path)
+
+__nvim_tmux_vars_snapshot(%s)
+del __nvim_tmux_vars_snapshot
+]]):format(vim.fn.json_encode(vars_file))
+
+    return "exec(" .. vim.fn.json_encode(source) .. ")"
+end
+
+local function is_python_context()
+    local context_command = tmux_pane_option("@nvim_context_command")
+    local extension = vim.fn.expand("%:e"):lower()
+
+    return context_command == "ipython"
+        or vim.bo.filetype == "python"
+        or extension == "py"
+        or extension == "ipy"
+        or extension == "ipynb"
+end
+
+local function refresh_python_vars(target)
+    local vars_file = tmux_pane_option("@nvim_vars_file")
+
+    if not vars_file or not is_python_context() then
+        return
+    end
+
+    if paste_text(target, python_snapshot_source(vars_file), "vars") then
+        send_enter(target)
+    end
+end
+
 local function parse_fence(line)
     local marker, info = line:match("^%s*(```+)%s*(.*)$")
 
@@ -112,7 +282,7 @@ local function config()
     vim.b.tmux_target = vim.fn.input({
         prompt = "Tmux target pane: ",
         -- autocomplete with current target if exists, otherwise autocomplete with global
-        default = vim.b.tmux_target and vim.b.tmux_target or defaults.tmux_target,
+        default = vim.b.tmux_target and vim.b.tmux_target or target_pane(),
     })
 end
 
@@ -125,15 +295,12 @@ local function tunnell_range(r)
         return
     end
 
-    -- load buffer with range from `r.line1` to `r.line2`
-    vim.cmd("silent " .. r.line1 .. "," .. r.line2 .. ":w !tmux load-buffer - ")
+    local lines = vim.api.nvim_buf_get_lines(0, r.line1 - 1, r.line2, false)
+    local target = target_pane()
 
-    -- tunnell lines
-    local target = vim.b.tmux_target and vim.b.tmux_target or defaults.tmux_target
-    vim.fn.system("tmux paste-buffer -dpr -t " .. target)
-
-    -- tunnell <CR> to run cell in REPL
-    vim.fn.system("tmux send-keys -t " .. target .. " Enter")
+    if paste_text(target, table.concat(lines, "\n"), "code") then
+        send_enter(target)
+    end
 end
 
 -- Tunnells cell to target
@@ -186,8 +353,16 @@ end
 
 -- create user commands
 vim.api.nvim_create_user_command("TunnellConfig", config, {})
+vim.api.nvim_create_user_command("TunnellLine", function()
+    local line = vim.fn.line(".")
+
+    tunnell_range({ line1 = line, line2 = line })
+end, {})
 vim.api.nvim_create_user_command("TunnellRange", tunnell_range, { range = true })
 vim.api.nvim_create_user_command("TunnellCell", tunnell_cell, {})
+vim.api.nvim_create_user_command("TunnellVars", function()
+    refresh_python_vars(target_pane())
+end, {})
 
 -- Setup function for users to call from their plugin managers
 function M.setup(user_config)

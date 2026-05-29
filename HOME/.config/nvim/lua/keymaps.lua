@@ -149,14 +149,15 @@ keymap("n", "T", ":lua vim.lsp.buf.document_symbol()<cr>", opts)
 
 -- open actual file with sublime-text
 
--- Key mappings to send code with slime
-keymap('n', '<leader>n', ':SlimeSendCurrentLine <cr><cr><cr>', {})
-keymap('v', '<leader>n', ':SlimeSend <cr><cr><cr>', {})
+-- Key mappings to send code to the tmux REPL
+keymap('n', '<leader>n', ':TunnellLine<CR>', opts)
+keymap('v', '<leader>n', ':TunnellRange<CR>', opts)
 
 -- dap
 keymap('n', '<leader>db', ':DapToggleBreakpoint <CR>', { noremap = true, silent = true })
 keymap('n', '<leader>dpr', ':lua require("dap-python").test_method()<CR>', { noremap = true, silent = true })
 
 vim.keymap.set("n", "<leader>zz", ":TunnellCell<CR>", { silent = true, desc = "Tunnel cell" })
+vim.keymap.set("n", "<leader>zv", ":TunnellVars<CR>", { silent = true, desc = "Refresh REPL vars" })
 vim.keymap.set("n", "<leader>ci", ":CodexInsert<CR>", { silent = true, desc = "Insert Codex reply at cursor" })
 vim.keymap.set("v", "<leader>ci", ":CodexInsert<CR>", { silent = true, desc = "Send selection to Codex and insert reply" })

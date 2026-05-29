@@ -236,6 +236,8 @@ brew mas
 brew mbedtls
 brew mcp-atlassian
 brew md4c
+brew mermaid-cli
+brew merve
 brew meson
 brew minikube
 brew mono
@@ -245,6 +247,7 @@ brew mpg123
 brew mujs
 brew mysql
 brew nb
+brew nbytes
 brew ncdu
 brew ncurses
 brew neomutt
@@ -323,6 +326,7 @@ brew shellcheck
 brew shfmt
 brew signal-cli
 brew simdjson
+brew simdutf
 brew snappy
 brew sops
 brew speex
@@ -460,7 +464,7 @@ brew neofetch
 # App Store applications
 appstore 1569813296 1Password for Safari (8.12.12)
 appstore 937984704 Amphetamine (5.3.2)
-appstore 1352778147 Bitwarden (2026.3.1)
+appstore 1352778147 Bitwarden (2026.4.0)
 appstore 1171346381 Easy CSV Editor (2.70)
 appstore 508368068 Get Plain Text (2.0)
 appstore 409201541 Pages (14.5)

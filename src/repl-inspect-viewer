@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import curses
+import json
+import textwrap
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+COLOR_HEADER = 1
+COLOR_SECTION = 2
+COLOR_FOOTER = 3
+COLOR_MUTED = 4
+
+
+@dataclass
+class InspectState:
+    """Mutable state for the inspect viewer."""
+
+    offset: int = 0
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the inspect viewer."""
+
+    parser = argparse.ArgumentParser(description="View a class or object inspection snapshot.")
+    parser.add_argument("--inspect-file", required=True, type=Path)
+    return parser.parse_args()
+
+
+def text_value(value: Any) -> str:
+    """Return a plain string for a JSON value."""
+
+    return str(value) if value is not None else ""
+
+
+def load_payload(path: Path) -> dict[str, Any]:
+    """Load an inspect snapshot from JSON."""
+
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def init_colors(window: curses.window) -> None:
+    """Initialize a transparent color palette."""
+
+    curses.start_color()
+    curses.use_default_colors()
+    window.bkgd(" ", curses.color_pair(0))
+
+    if not curses.has_colors():
+        return
+
+    curses.init_pair(COLOR_HEADER, curses.COLOR_CYAN, -1)
+    curses.init_pair(COLOR_SECTION, curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_FOOTER, curses.COLOR_BLUE, -1)
+    curses.init_pair(COLOR_MUTED, curses.COLOR_BLUE, -1)
+
+
+def color(number: int, attr: int = 0) -> int:
+    """Return a curses color pair with optional attributes."""
+
+    if not curses.has_colors():
+        return attr
+
+    return curses.color_pair(number) | attr
+
+
+def wrap_lines(text: str, width: int) -> list[str]:
+    """Wrap text to the current terminal width."""
+
+    if not text:
+        return []
+
+    lines = []
+    for line in text.splitlines():
+        if line.strip():
+            lines.extend(textwrap.wrap(line, width=max(20, width), replace_whitespace=False))
+        else:
+            lines.append("")
+    return lines
+
+
+def add_section(lines: list[tuple[str, int]], title: str) -> None:
+    """Append a section heading."""
+
+    if lines:
+        lines.append(("", 0))
+    lines.append((title, color(COLOR_SECTION, curses.A_BOLD)))
+    lines.append(("-" * len(title), color(COLOR_MUTED, curses.A_DIM)))
+
+
+def build_lines(payload: dict[str, Any], width: int) -> list[tuple[str, int]]:
+    """Build display lines for an inspect snapshot."""
+
+    lines: list[tuple[str, int]] = []
+    kind = text_value(payload.get("kind"))
+    name = text_value(payload.get("name"))
+    class_name = text_value(payload.get("class_name"))
+    module = text_value(payload.get("module"))
+    bases = payload.get("bases") or []
+    signature = text_value(payload.get("signature"))
+
+    title = f"{kind} {name}: {class_name}".strip()
+    lines.append((title, color(COLOR_HEADER, curses.A_BOLD)))
+    if module:
+        lines.append((f"module: {module}", color(COLOR_MUTED)))
+    if bases:
+        lines.append((f"bases: {', '.join(text_value(base) for base in bases)}", color(COLOR_MUTED)))
+    if signature:
+        lines.append((f"signature: {signature}", 0))
+
+    doc = text_value(payload.get("doc"))
+    if doc:
+        add_section(lines, "doc")
+        lines.extend((line, 0) for line in wrap_lines(doc, width))
+
+    representation = text_value(payload.get("repr"))
+    if representation:
+        add_section(lines, "repr")
+        lines.extend((line, 0) for line in wrap_lines(representation, width))
+
+    attributes = payload.get("attributes") or []
+    if attributes:
+        add_section(lines, "attributes")
+        for item in attributes:
+            line = f"{text_value(item.get('name'))}: {text_value(item.get('type'))} = {text_value(item.get('value'))}"
+            lines.extend((wrapped, 0) for wrapped in wrap_lines(line, width))
+
+    methods = payload.get("methods") or []
+    if methods:
+        add_section(lines, "methods")
+        for item in methods:
+            signature = text_value(item.get("signature"))
+            line = f"{text_value(item.get('name'))}{signature}"
+            doc = text_value(item.get("doc"))
+            if doc:
+                line = f"{line}  - {doc}"
+            lines.extend((wrapped, 0) for wrapped in wrap_lines(line, width))
+
+    return lines
+
+
+def draw_text(window: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
+    """Draw text while ignoring boundary errors."""
+
+    try:
+        window.addstr(y, x, text, attr)
+    except curses.error:
+        return
+
+
+def clamp_state(state: InspectState, line_count: int, height: int) -> None:
+    """Keep scroll offset inside valid bounds."""
+
+    visible_rows = max(1, height - 1)
+    state.offset = max(0, min(state.offset, max(0, line_count - visible_rows)))
+
+
+def draw(window: curses.window, payload: dict[str, Any], state: InspectState) -> None:
+    """Render the inspect viewer."""
+
+    window.erase()
+    height, width = window.getmaxyx()
+    lines = build_lines(payload, max(20, width - 1))
+    clamp_state(state, len(lines), height)
+
+    visible_rows = max(1, height - 1)
+    for y, (line, attr) in enumerate(lines[state.offset : state.offset + visible_rows]):
+        draw_text(window, y, 0, line[:width].ljust(width), attr)
+
+    footer = "j/k: scroll  PgUp/PgDn  q: quit"
+    draw_text(window, height - 1, 0, footer[:width].ljust(width), color(COLOR_FOOTER, curses.A_DIM))
+    window.refresh()
+
+
+def handle_key(key: int, state: InspectState, height: int) -> bool:
+    """Handle one inspect viewer key event."""
+
+    if key in (ord("q"), 27):
+        return False
+    if key in (curses.KEY_UP, ord("k")):
+        state.offset -= 1
+    elif key in (curses.KEY_DOWN, ord("j")):
+        state.offset += 1
+    elif key == curses.KEY_PPAGE:
+        state.offset -= max(1, height - 2)
+    elif key == curses.KEY_NPAGE:
+        state.offset += max(1, height - 2)
+
+    return True
+
+
+def run(window: curses.window, payload: dict[str, Any]) -> None:
+    """Run the inspect viewer."""
+
+    curses.curs_set(0)
+    init_colors(window)
+    window.keypad(True)
+    state = InspectState()
+
+    while True:
+        height, _ = window.getmaxyx()
+        draw(window, payload, state)
+        if not handle_key(window.getch(), state, height):
+            break
+
+
+def main() -> None:
+    """Run the inspect viewer from the command line."""
+
+    args = parse_args()
+    payload = load_payload(args.inspect_file)
+    curses.wrapper(run, payload)
+
+
+if __name__ == "__main__":
+    main()

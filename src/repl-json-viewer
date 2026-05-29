@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import curses
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+COLOR_TITLE = 1
+COLOR_KEY = 2
+COLOR_STRING = 3
+COLOR_NUMBER = 4
+COLOR_LITERAL = 5
+COLOR_PUNCT = 6
+COLOR_FOOTER = 7
+NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+
+@dataclass(frozen=True)
+class JsonSnapshot:
+    """A serialized dict preview."""
+
+    name: str
+    type_name: str
+    lines: list[str]
+
+
+@dataclass(frozen=True)
+class JsonSegment:
+    """One colored JSON text segment."""
+
+    start: int
+    end: int
+    attr: int
+
+
+@dataclass
+class JsonState:
+    """Mutable state for a scrollable JSON viewer."""
+
+    row_offset: int = 0
+    column_offset: int = 0
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the JSON viewer."""
+
+    parser = argparse.ArgumentParser(description="View a dict snapshot as colored JSON.")
+    parser.add_argument("--json-file", required=True, type=Path)
+    return parser.parse_args()
+
+
+def text_value(value: Any) -> str:
+    """Return a plain string for a JSON value."""
+
+    return str(value) if value is not None else ""
+
+
+def load_json(path: Path) -> JsonSnapshot:
+    """Load a dict preview snapshot from JSON."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+    pretty = json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True)
+    return JsonSnapshot(
+        name=text_value(payload.get("name")) if isinstance(payload, dict) else path.stem,
+        type_name=text_value(payload.get("type")) if isinstance(payload, dict) else "",
+        lines=pretty.splitlines() or [pretty],
+    )
+
+
+def init_colors(window: curses.window) -> None:
+    """Initialize a transparent color palette."""
+
+    curses.start_color()
+    curses.use_default_colors()
+    window.bkgd(" ", curses.color_pair(0))
+
+    if not curses.has_colors():
+        return
+
+    curses.init_pair(COLOR_TITLE, curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_KEY, curses.COLOR_CYAN, -1)
+    curses.init_pair(COLOR_STRING, curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_NUMBER, curses.COLOR_MAGENTA, -1)
+    curses.init_pair(COLOR_LITERAL, curses.COLOR_YELLOW, -1)
+    curses.init_pair(COLOR_PUNCT, curses.COLOR_BLUE, -1)
+    curses.init_pair(COLOR_FOOTER, curses.COLOR_BLUE, -1)
+
+
+def color(number: int, attr: int = 0) -> int:
+    """Return a curses color pair with optional attributes."""
+
+    if not curses.has_colors():
+        return attr
+
+    return curses.color_pair(number) | attr
+
+
+def truncate(value: str, width: int) -> str:
+    """Trim text to a fixed width."""
+
+    if width <= 0:
+        return ""
+    if len(value) <= width:
+        return value
+    if width == 1:
+        return "."
+    return value[: width - 1] + "."
+
+
+def string_end(line: str, start: int) -> int:
+    """Return the index after a JSON string token."""
+
+    index = start + 1
+    escaped = False
+
+    while index < len(line):
+        character = line[index]
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == '"':
+            return index + 1
+        index += 1
+
+    return len(line)
+
+
+def is_key(line: str, end: int) -> bool:
+    """Return whether a string token is followed by a JSON object colon."""
+
+    index = end
+    while index < len(line) and line[index].isspace():
+        index += 1
+    return index < len(line) and line[index] == ":"
+
+
+def literal_end(line: str, start: int) -> int:
+    """Return the end index for a JSON literal token."""
+
+    for literal in ("true", "false", "null"):
+        if line.startswith(literal, start):
+            return start + len(literal)
+    return start
+
+
+def line_segments(line: str) -> list[JsonSegment]:
+    """Return syntax-colored segments for one pretty-printed JSON line."""
+
+    segments = []
+    index = 0
+
+    while index < len(line):
+        character = line[index]
+
+        if character == '"':
+            end = string_end(line, index)
+            segment_color = COLOR_KEY if is_key(line, end) else COLOR_STRING
+            segments.append(JsonSegment(index, end, color(segment_color)))
+            index = end
+            continue
+
+        if character in "-0123456789":
+            match = NUMBER_PATTERN.match(line, index)
+            if match:
+                segments.append(JsonSegment(index, match.end(), color(COLOR_NUMBER)))
+                index = match.end()
+                continue
+
+        literal_stop = literal_end(line, index)
+        if literal_stop > index:
+            segments.append(JsonSegment(index, literal_stop, color(COLOR_LITERAL)))
+            index = literal_stop
+            continue
+
+        if character in "{}[]:,":
+            segments.append(JsonSegment(index, index + 1, color(COLOR_PUNCT, curses.A_BOLD)))
+            index += 1
+            continue
+
+        index += 1
+
+    return segments
+
+
+def draw_text(window: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
+    """Draw text while ignoring boundary errors."""
+
+    try:
+        window.addstr(y, x, text, attr)
+    except curses.error:
+        return
+
+
+def draw_json_line(window: curses.window, y: int, line: str, offset: int, width: int) -> None:
+    """Draw one JSON line with horizontal clipping and syntax color."""
+
+    draw_text(window, y, 0, " " * width)
+    visible_start = offset
+    visible_end = offset + width
+    plain = line[visible_start:visible_end]
+    draw_text(window, y, 0, plain.ljust(width))
+
+    for segment in line_segments(line):
+        start = max(segment.start, visible_start)
+        end = min(segment.end, visible_end)
+        if start >= end:
+            continue
+
+        text = line[start:end]
+        draw_text(window, y, start - visible_start, text, segment.attr)
+
+
+def max_line_width(lines: list[str]) -> int:
+    """Return the widest rendered JSON line."""
+
+    return max((len(line) for line in lines), default=0)
+
+
+def clamp_state(state: JsonState, snapshot: JsonSnapshot, height: int, width: int) -> None:
+    """Keep JSON scrolling offsets inside valid bounds."""
+
+    visible_rows = max(1, height - 2)
+    rendered_width = max_line_width(snapshot.lines)
+    state.row_offset = max(0, min(state.row_offset, max(0, len(snapshot.lines) - visible_rows)))
+    state.column_offset = max(0, min(state.column_offset, max(0, rendered_width - width)))
+
+
+def draw(window: curses.window, snapshot: JsonSnapshot, state: JsonState) -> None:
+    """Render the JSON viewer."""
+
+    window.erase()
+    height, width = window.getmaxyx()
+
+    if height < 5 or width < 24:
+        draw_text(window, 0, 0, "json")
+        window.refresh()
+        return
+
+    clamp_state(state, snapshot, height, width)
+    title = f"{snapshot.name} {snapshot.type_name}".strip()
+    draw_text(window, 0, 0, truncate(title, width).ljust(width), color(COLOR_TITLE, curses.A_BOLD))
+
+    visible_rows = max(1, height - 2)
+    visible_lines = snapshot.lines[state.row_offset : state.row_offset + visible_rows]
+    for screen_row, line in enumerate(visible_lines):
+        draw_json_line(window, screen_row + 1, line, state.column_offset, width)
+
+    footer = "j/k: scroll  h/l: columns  PgUp/PgDn  q: quit"
+    draw_text(window, height - 1, 0, truncate(footer, width).ljust(width), color(COLOR_FOOTER, curses.A_DIM))
+    window.refresh()
+
+
+def handle_key(key: int, state: JsonState, height: int, width: int) -> bool:
+    """Handle one JSON viewer key event."""
+
+    if key in (ord("q"), 27):
+        return False
+    if key in (curses.KEY_UP, ord("k")):
+        state.row_offset -= 1
+    elif key in (curses.KEY_DOWN, ord("j")):
+        state.row_offset += 1
+    elif key == curses.KEY_PPAGE:
+        state.row_offset -= max(1, height - 2)
+    elif key == curses.KEY_NPAGE:
+        state.row_offset += max(1, height - 2)
+    elif key in (curses.KEY_LEFT, ord("h")):
+        state.column_offset -= max(1, width // 4)
+    elif key in (curses.KEY_RIGHT, ord("l")):
+        state.column_offset += max(1, width // 4)
+    elif key == curses.KEY_HOME:
+        state.column_offset = 0
+    elif key == curses.KEY_END:
+        state.column_offset += width
+
+    return True
+
+
+def run(window: curses.window, snapshot: JsonSnapshot) -> None:
+    """Run the curses JSON viewer."""
+
+    curses.curs_set(0)
+    init_colors(window)
+    window.keypad(True)
+
+    state = JsonState()
+
+    while True:
+        height, width = window.getmaxyx()
+        draw(window, snapshot, state)
+        if not handle_key(window.getch(), state, height, width):
+            break
+
+
+def main() -> None:
+    """Run the JSON viewer from the command line."""
+
+    args = parse_args()
+    snapshot = load_json(args.json_file)
+    curses.wrapper(run, snapshot)
+
+
+if __name__ == "__main__":
+    main()

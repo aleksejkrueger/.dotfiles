@@ -1,0 +1,573 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import curses
+import json
+import shlex
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ReplVariable:
+    """A compact representation of one REPL variable."""
+
+    name: str
+    type_name: str
+    detail: str
+    value: str
+    viewer_kind: str = ""
+    viewer_path: str = ""
+
+
+@dataclass(frozen=True)
+class TableColumn:
+    """Rendering metadata for one variable table column."""
+
+    title: str
+    field: str
+    min_width: int
+    max_width: int
+    weight: int
+
+
+@dataclass
+class ViewState:
+    """Mutable state for the variable browser."""
+
+    variables: list[ReplVariable]
+    selected: int = 0
+    offset: int = 0
+    updated_at: str = ""
+    message: str = ""
+
+
+TABLE_COLUMNS = (
+    TableColumn("name", "name", 8, 24, 2),
+    TableColumn("type", "type_name", 6, 18, 1),
+    TableColumn("detail", "detail", 6, 24, 1),
+    TableColumn("value", "value", 8, 120, 4),
+)
+TABLE_SEPARATOR = " | "
+TABLE_DIVIDER = "-+-"
+COLOR_HEADER = 1
+COLOR_DIVIDER = 2
+COLOR_NAME = 3
+COLOR_TYPE = 4
+COLOR_DETAIL = 5
+COLOR_FOOTER = 6
+COLOR_SELECTED = 7
+COLOR_MESSAGE = 8
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the variable browser."""
+
+    parser = argparse.ArgumentParser(description="Browse exported REPL variables in tmux.")
+    parser.add_argument("--vars-file", required=True, type=Path)
+    parser.add_argument("--target-pane", required=True)
+    parser.add_argument("--refresh-seconds", default=0.5, type=float)
+    return parser.parse_args()
+
+
+def text_value(value: Any) -> str:
+    """Return a plain string for JSON values that may be missing or malformed."""
+
+    return str(value) if value is not None else ""
+
+
+def truncate(value: str, width: int) -> str:
+    """Trim a string to fit in a fixed terminal width."""
+
+    if width <= 0:
+        return ""
+    if len(value) <= width:
+        return value
+    if width == 1:
+        return "."
+    return value[: width - 1] + "."
+
+
+def init_colors(window: curses.window) -> None:
+    """Initialize a small transparent color palette for curses."""
+
+    curses.start_color()
+    curses.use_default_colors()
+    window.bkgd(" ", curses.color_pair(0))
+
+    if not curses.has_colors():
+        return
+
+    curses.init_pair(COLOR_HEADER, curses.COLOR_CYAN, -1)
+    curses.init_pair(COLOR_DIVIDER, curses.COLOR_BLUE, -1)
+    curses.init_pair(COLOR_NAME, curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_TYPE, curses.COLOR_MAGENTA, -1)
+    curses.init_pair(COLOR_DETAIL, curses.COLOR_YELLOW, -1)
+    curses.init_pair(COLOR_FOOTER, curses.COLOR_BLUE, -1)
+    curses.init_pair(COLOR_SELECTED, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    curses.init_pair(COLOR_MESSAGE, curses.COLOR_YELLOW, -1)
+
+
+def color(number: int, attr: int = 0) -> int:
+    """Return a curses color pair with optional attributes."""
+
+    if not curses.has_colors():
+        return attr
+
+    return curses.color_pair(number) | attr
+
+
+def visible_row_count(height: int) -> int:
+    """Return how many variable rows fit in the current window."""
+
+    return max(1, height - 3)
+
+
+def minimum_column_width(column: TableColumn) -> int:
+    """Return the smallest readable width for a table column."""
+
+    return min(column.min_width, len(column.title))
+
+
+def shrink_widths(widths: list[int], target_total: int) -> list[int]:
+    """Shrink column widths from right to left until they fit."""
+
+    minimums = [minimum_column_width(column) for column in TABLE_COLUMNS]
+
+    while sum(widths) > target_total:
+        changed = False
+
+        for index in reversed(range(len(widths))):
+            if widths[index] > minimums[index]:
+                widths[index] -= 1
+                changed = True
+                break
+
+        if not changed:
+            break
+
+    return widths
+
+
+def grow_widths(widths: list[int], extra_width: int) -> list[int]:
+    """Grow column widths by weighted priority until extra width is used."""
+
+    weighted_indexes = [
+        index
+        for index, column in enumerate(TABLE_COLUMNS)
+        for _ in range(column.weight)
+    ]
+
+    while extra_width > 0:
+        changed = False
+
+        for index in weighted_indexes:
+            if widths[index] >= TABLE_COLUMNS[index].max_width:
+                continue
+
+            widths[index] += 1
+            extra_width -= 1
+            changed = True
+
+            if extra_width == 0:
+                break
+
+        if not changed:
+            widths[-1] += extra_width
+            break
+
+    return widths
+
+
+def table_widths(total_width: int) -> list[int]:
+    """Compute table column widths for the current terminal width."""
+
+    separator_width = len(TABLE_SEPARATOR) * (len(TABLE_COLUMNS) - 1)
+    available_width = max(1, total_width - separator_width)
+    widths = [column.min_width for column in TABLE_COLUMNS]
+
+    if sum(widths) > available_width:
+        return shrink_widths(widths, available_width)
+
+    return grow_widths(widths, available_width - sum(widths))
+
+
+def table_cell(value: str, width: int) -> str:
+    """Return one padded table cell."""
+
+    return f"{truncate(value, width):<{width}}"
+
+
+def variable_value(variable: ReplVariable, column: TableColumn) -> str:
+    """Read a variable field for the requested table column."""
+
+    return getattr(variable, column.field)
+
+
+def table_row(values: list[str], widths: list[int]) -> str:
+    """Render a complete table row from cell values."""
+
+    return TABLE_SEPARATOR.join(
+        table_cell(value, width)
+        for value, width in zip(values, widths, strict=True)
+    )
+
+
+def header_row(widths: list[int]) -> str:
+    """Render the variable table header row."""
+
+    return table_row([column.title for column in TABLE_COLUMNS], widths)
+
+
+def divider_row(widths: list[int]) -> str:
+    """Render the variable table divider row."""
+
+    return TABLE_DIVIDER.join("-" * width for width in widths)
+
+
+def variable_row(variable: ReplVariable, widths: list[int]) -> str:
+    """Render one variable as a table row."""
+
+    return table_row(
+        [variable_value(variable, column) for column in TABLE_COLUMNS],
+        widths,
+    )
+
+
+def load_variables(path: Path) -> tuple[list[ReplVariable], str, str]:
+    """Load exported variables from a JSON snapshot."""
+
+    if not path.exists():
+        return [], "", "Waiting for the first variable snapshot."
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return [], "", f"Could not read vars file: {error}"
+
+    variables = [
+        ReplVariable(
+            name=text_value(item.get("name")),
+            type_name=text_value(item.get("type")),
+            detail=text_value(item.get("detail")),
+            value=text_value(item.get("value")),
+            viewer_kind=text_value(item.get("viewer_kind")),
+            viewer_path=text_value(item.get("viewer_path")),
+        )
+        for item in payload.get("vars", [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    message = text_value(payload.get("message"))
+    return variables, text_value(payload.get("updated_at")), message
+
+
+def send_text(target_pane: str, text: str, submit: bool = False) -> str:
+    """Send literal text to the target tmux pane."""
+
+    try:
+        subprocess.run(["tmux", "send-keys", "-t", target_pane, "-l", text], check=True)
+        if submit:
+            subprocess.run(["tmux", "send-keys", "-t", target_pane, "Enter"], check=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        return f"Could not send to {target_pane}: {error}"
+
+    return f"Pasted {text}"
+
+
+def copy_text(text: str) -> str:
+    """Copy text into the tmux paste buffer."""
+
+    try:
+        subprocess.run(["tmux", "set-buffer", text], check=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        return f"Could not copy to tmux buffer: {error}"
+
+    return f"Copied {text}"
+
+
+def open_external(path: Path) -> str:
+    """Open a file with the platform's default graphical application."""
+
+    if sys.platform == "darwin":
+        command = ["open", str(path)]
+    elif sys.platform.startswith("linux"):
+        command = ["xdg-open", str(path)]
+    elif sys.platform.startswith("win"):
+        command = ["cmd", "/c", "start", "", str(path)]
+    else:
+        return f"No external opener configured for {sys.platform}"
+
+    try:
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as error:
+        return f"Could not open {path.name}: {error}"
+
+    return f"Opened {path.name}"
+
+
+def open_viewer(variable: ReplVariable) -> str:
+    """Open a variable preview in a tmux popup."""
+
+    if not variable.viewer_path:
+        return f"No preview for {variable.name}"
+
+    viewer_path = Path(variable.viewer_path)
+    figure_suffixes = {".png", ".jpg", ".jpeg", ".svg", ".pdf"}
+    is_figure = variable.viewer_kind == "figure" or viewer_path.suffix.lower() in figure_suffixes
+
+    if is_figure:
+        return open_external(viewer_path)
+
+    if variable.viewer_kind == "json":
+        viewer_script = Path.home() / ".dotfiles" / "src" / "repl-json-viewer"
+        command = f"{shlex.quote(str(viewer_script))} --json-file {shlex.quote(variable.viewer_path)}"
+    elif variable.viewer_kind == "inspect":
+        viewer_script = Path.home() / ".dotfiles" / "src" / "repl-inspect-viewer"
+        command = f"{shlex.quote(str(viewer_script))} --inspect-file {shlex.quote(variable.viewer_path)}"
+    else:
+        viewer_script = Path.home() / ".dotfiles" / "src" / "repl-table-viewer"
+        command = f"{shlex.quote(str(viewer_script))} --table-file {shlex.quote(variable.viewer_path)}"
+
+    try:
+        subprocess.run(["tmux", "display-popup", "-E", "-w", "90%", "-h", "80%", command], check=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        return f"Could not open viewer: {error}"
+
+    return f"Opened {variable.name}"
+
+
+def clamp_state(state: ViewState, height: int) -> None:
+    """Keep selection and scroll offset inside the visible variable list."""
+
+    if not state.variables:
+        state.selected = 0
+        state.offset = 0
+        return
+
+    state.selected = max(0, min(state.selected, len(state.variables) - 1))
+    visible_rows = visible_row_count(height)
+
+    if state.selected < state.offset:
+        state.offset = state.selected
+    elif state.selected >= state.offset + visible_rows:
+        state.offset = state.selected - visible_rows + 1
+
+    max_offset = max(0, len(state.variables) - visible_rows)
+    state.offset = max(0, min(state.offset, max_offset))
+
+
+def draw_text(window: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
+    """Draw text while ignoring curses boundary errors."""
+
+    try:
+        window.addstr(y, x, text, attr)
+    except curses.error:
+        return
+
+
+def draw_cell(window: curses.window, y: int, x: int, text: str, attr: int) -> int:
+    """Draw one table cell and return the next cursor column."""
+
+    draw_text(window, y, x, text, attr)
+    return x + len(text)
+
+
+def draw_colored_row(
+    window: curses.window,
+    y: int,
+    values: list[str],
+    widths: list[int],
+    attrs: list[int],
+) -> None:
+    """Draw one table row with per-column colors."""
+
+    x = 0
+    for index, (value, width, attr) in enumerate(zip(values, widths, attrs, strict=True)):
+        x = draw_cell(window, y, x, table_cell(value, width), attr)
+        if index < len(values) - 1:
+            x = draw_cell(window, y, x, TABLE_SEPARATOR, color(COLOR_DIVIDER, curses.A_DIM))
+
+
+def draw_row(
+    window: curses.window,
+    y: int,
+    variable: ReplVariable,
+    widths: list[int],
+    width: int,
+    selected: bool,
+) -> None:
+    """Draw one variable row."""
+
+    if selected:
+        draw_text(window, y, 0, " " * width, color(COLOR_SELECTED))
+        draw_text(window, y, 0, truncate(variable_row(variable, widths), width), color(COLOR_SELECTED))
+        return
+
+    draw_colored_row(
+        window,
+        y,
+        [variable_value(variable, column) for column in TABLE_COLUMNS],
+        widths,
+        [
+            color(COLOR_NAME),
+            color(COLOR_TYPE),
+            color(COLOR_DETAIL),
+            0,
+        ],
+    )
+
+
+def draw(window: curses.window, state: ViewState) -> None:
+    """Render the complete variable browser."""
+
+    window.erase()
+    height, width = window.getmaxyx()
+    if height < 5 or width < 24:
+        draw_text(window, 0, 0, "vars")
+        window.refresh()
+        return
+
+    widths = table_widths(width)
+    draw_colored_row(
+        window,
+        0,
+        [column.title for column in TABLE_COLUMNS],
+        widths,
+        [color(COLOR_HEADER, curses.A_BOLD)] * len(TABLE_COLUMNS),
+    )
+    draw_text(window, 1, 0, truncate(divider_row(widths), width), color(COLOR_DIVIDER, curses.A_DIM))
+
+    visible_rows = visible_row_count(height)
+    if state.variables:
+        visible_indexes = range(
+            state.offset,
+            min(len(state.variables), state.offset + visible_rows),
+        )
+        for screen_row, index in enumerate(visible_indexes):
+            draw_row(window, screen_row + 2, state.variables[index], widths, width, index == state.selected)
+    else:
+        draw_text(window, 2, 0, truncate(state.message or "No variables exported yet.", width), color(COLOR_MESSAGE))
+
+    footer = "Click: select  Enter: run  o: open  p: print  y: copy  q: quit"
+    if state.message and state.variables:
+        footer = state.message
+    draw_text(window, height - 1, 0, truncate(footer, width), color(COLOR_FOOTER, curses.A_DIM))
+    window.refresh()
+
+
+def send_selected(
+    state: ViewState,
+    target_pane: str,
+    expression: str | None = None,
+    submit: bool = False,
+) -> None:
+    """Send the selected variable or expression to the REPL pane."""
+
+    if not state.variables:
+        state.message = "No variables to send."
+        return
+
+    variable = state.variables[state.selected]
+    state.message = send_text(target_pane, expression or variable.name, submit)
+
+
+def handle_mouse(state: ViewState, target_pane: str, height: int) -> None:
+    """Handle mouse clicks and wheel events inside the variable browser."""
+
+    try:
+        _, _, y, _, button_state = curses.getmouse()
+    except curses.error:
+        return
+
+    if button_state & curses.BUTTON4_PRESSED:
+        state.selected -= 1
+        clamp_state(state, height)
+        return
+
+    if hasattr(curses, "BUTTON5_PRESSED") and button_state & curses.BUTTON5_PRESSED:
+        state.selected += 1
+        clamp_state(state, height)
+        return
+
+    if button_state & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON1_RELEASED):
+        index = state.offset + y - 2
+        if 0 <= index < len(state.variables):
+            state.selected = index
+            clamp_state(state, height)
+
+
+def handle_key(key: int, state: ViewState, target_pane: str, height: int) -> bool:
+    """Handle one keyboard or mouse event."""
+
+    if key in (ord("q"), 27):
+        return False
+    if key == curses.KEY_MOUSE:
+        handle_mouse(state, target_pane, height)
+    elif key in (curses.KEY_UP, ord("k")):
+        state.selected -= 1
+    elif key in (curses.KEY_DOWN, ord("j")):
+        state.selected += 1
+    elif key == curses.KEY_PPAGE:
+        state.selected -= max(1, height - 5)
+    elif key == curses.KEY_NPAGE:
+        state.selected += max(1, height - 5)
+    elif key in (10, 13):
+        send_selected(state, target_pane, submit=True)
+    elif key == ord("p") and state.variables:
+        send_selected(state, target_pane, f"print({state.variables[state.selected].name})", True)
+    elif key == ord("o") and state.variables:
+        state.message = open_viewer(state.variables[state.selected])
+    elif key == ord("y") and state.variables:
+        state.message = copy_text(state.variables[state.selected].name)
+
+    clamp_state(state, height)
+    return True
+
+
+def run(window: curses.window, args: argparse.Namespace) -> None:
+    """Run the curses variable browser."""
+
+    curses.curs_set(0)
+    curses.mousemask(curses.ALL_MOUSE_EVENTS)
+    init_colors(window)
+    window.keypad(True)
+    window.timeout(200)
+
+    state = ViewState(variables=[])
+    last_load = 0.0
+
+    while True:
+        height, _ = window.getmaxyx()
+        now = time.monotonic()
+
+        if now - last_load >= args.refresh_seconds:
+            variables, updated_at, message = load_variables(args.vars_file)
+            state.variables = variables
+            state.updated_at = updated_at
+            if message:
+                state.message = message
+            clamp_state(state, height)
+            last_load = now
+
+        draw(window, state)
+        key = window.getch()
+        if key == -1:
+            continue
+        if not handle_key(key, state, args.target_pane, height):
+            break
+
+
+def main() -> None:
+    """Run the variable browser from the command line."""
+
+    args = parse_args()
+    curses.wrapper(run, args)
+
+
+if __name__ == "__main__":
+    main()

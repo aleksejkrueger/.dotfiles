@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import curses
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+COLOR_HEADER = 1
+COLOR_DIVIDER = 2
+COLOR_TITLE = 3
+COLOR_FOOTER = 4
+COLOR_INDEX = 5
+
+
+@dataclass(frozen=True)
+class TableSnapshot:
+    """A serialized dataframe preview."""
+
+    name: str
+    type_name: str
+    shape: str
+    columns: list[str]
+    rows: list[list[str]]
+
+
+@dataclass
+class TableState:
+    """Mutable state for a scrollable table viewer."""
+
+    row_offset: int = 0
+    column_offset: int = 0
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the table viewer."""
+
+    parser = argparse.ArgumentParser(description="View a dataframe snapshot in tmux.")
+    parser.add_argument("--table-file", required=True, type=Path)
+    return parser.parse_args()
+
+
+def text_value(value: Any) -> str:
+    """Return a plain string for a JSON value."""
+
+    return str(value) if value is not None else ""
+
+
+def load_table(path: Path) -> TableSnapshot:
+    """Load a dataframe preview from JSON."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    columns = [text_value(column) for column in payload.get("columns", [])]
+    rows = [
+        [text_value(cell) for cell in row]
+        for row in payload.get("rows", [])
+        if isinstance(row, list)
+    ]
+    return TableSnapshot(
+        name=text_value(payload.get("name")),
+        type_name=text_value(payload.get("type")),
+        shape=text_value(payload.get("shape")),
+        columns=columns,
+        rows=rows,
+    )
+
+
+def truncate(value: str, width: int) -> str:
+    """Trim text to a fixed width."""
+
+    if width <= 0:
+        return ""
+    if len(value) <= width:
+        return value
+    if width == 1:
+        return "."
+    return value[: width - 1] + "."
+
+
+def init_colors(window: curses.window) -> None:
+    """Initialize a small transparent color palette for curses."""
+
+    curses.start_color()
+    curses.use_default_colors()
+    window.bkgd(" ", curses.color_pair(0))
+
+    if not curses.has_colors():
+        return
+
+    curses.init_pair(COLOR_HEADER, curses.COLOR_CYAN, -1)
+    curses.init_pair(COLOR_DIVIDER, curses.COLOR_BLUE, -1)
+    curses.init_pair(COLOR_TITLE, curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_FOOTER, curses.COLOR_BLUE, -1)
+    curses.init_pair(COLOR_INDEX, curses.COLOR_YELLOW, -1)
+
+
+def color(number: int, attr: int = 0) -> int:
+    """Return a curses color pair with optional attributes."""
+
+    if not curses.has_colors():
+        return attr
+
+    return curses.color_pair(number) | attr
+
+
+def column_widths(table: TableSnapshot) -> list[int]:
+    """Compute bounded display widths for table columns."""
+
+    widths = []
+    for index, column in enumerate(table.columns):
+        values = [row[index] for row in table.rows if index < len(row)]
+        content_width = max([len(column), *(len(value) for value in values[:200])], default=len(column))
+        widths.append(max(6, min(content_width, 28)))
+    return widths
+
+
+def render_cells(cells: list[str], widths: list[int]) -> str:
+    """Render one row of cells."""
+
+    return " | ".join(
+        f"{truncate(cell, width):<{width}}"
+        for cell, width in zip(cells, widths, strict=True)
+    )
+
+
+def draw_text(window: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
+    """Draw text while ignoring boundary errors."""
+
+    try:
+        window.addstr(y, x, text, attr)
+    except curses.error:
+        return
+
+
+def horizontal_slice(text: str, offset: int, width: int) -> str:
+    """Return the visible horizontal slice of a rendered row."""
+
+    return text[offset : offset + width].ljust(width)
+
+
+def clamp_state(state: TableState, table: TableSnapshot, height: int, width: int, rendered_width: int) -> None:
+    """Keep table scrolling offsets inside valid bounds."""
+
+    visible_rows = max(1, height - 4)
+    state.row_offset = max(0, min(state.row_offset, max(0, len(table.rows) - visible_rows)))
+    state.column_offset = max(0, min(state.column_offset, max(0, rendered_width - width)))
+
+
+def draw(window: curses.window, table: TableSnapshot, state: TableState) -> None:
+    """Render the dataframe table view."""
+
+    window.erase()
+    height, width = window.getmaxyx()
+
+    if height < 5 or width < 24:
+        draw_text(window, 0, 0, "table")
+        window.refresh()
+        return
+
+    widths = column_widths(table)
+    header = render_cells(table.columns, widths)
+    divider = "-+-".join("-" * cell_width for cell_width in widths)
+    rendered_width = max(len(header), len(divider))
+    clamp_state(state, table, height, width, rendered_width)
+
+    title = f"{table.name} {table.type_name} {table.shape}".strip()
+    draw_text(window, 0, 0, truncate(title, width), color(COLOR_TITLE, curses.A_BOLD))
+    draw_text(window, 1, 0, horizontal_slice(header, state.column_offset, width), color(COLOR_HEADER, curses.A_BOLD))
+    draw_text(window, 2, 0, horizontal_slice(divider, state.column_offset, width), color(COLOR_DIVIDER, curses.A_DIM))
+
+    visible_rows = max(1, height - 4)
+    for screen_row, row in enumerate(table.rows[state.row_offset : state.row_offset + visible_rows]):
+        padded_row = row + [""] * max(0, len(table.columns) - len(row))
+        rendered_row = render_cells(padded_row[: len(table.columns)], widths)
+        row_attr = color(COLOR_INDEX) if screen_row % 2 == 0 else 0
+        draw_text(window, screen_row + 3, 0, horizontal_slice(rendered_row, state.column_offset, width), row_attr)
+
+    footer = "j/k: rows  h/l: columns  PgUp/PgDn  q: quit"
+    draw_text(window, height - 1, 0, truncate(footer, width), color(COLOR_FOOTER, curses.A_DIM))
+    window.refresh()
+
+
+def handle_key(key: int, state: TableState, height: int, width: int) -> bool:
+    """Handle one table viewer key event."""
+
+    if key in (ord("q"), 27):
+        return False
+    if key in (curses.KEY_UP, ord("k")):
+        state.row_offset -= 1
+    elif key in (curses.KEY_DOWN, ord("j")):
+        state.row_offset += 1
+    elif key in (curses.KEY_PPAGE,):
+        state.row_offset -= max(1, height - 4)
+    elif key in (curses.KEY_NPAGE,):
+        state.row_offset += max(1, height - 4)
+    elif key in (curses.KEY_LEFT, ord("h")):
+        state.column_offset -= max(1, width // 4)
+    elif key in (curses.KEY_RIGHT, ord("l")):
+        state.column_offset += max(1, width // 4)
+    elif key == curses.KEY_HOME:
+        state.column_offset = 0
+    elif key == curses.KEY_END:
+        state.column_offset += width
+
+    return True
+
+
+def run(window: curses.window, table: TableSnapshot) -> None:
+    """Run the curses table viewer."""
+
+    curses.curs_set(0)
+    init_colors(window)
+    window.keypad(True)
+
+    state = TableState()
+
+    while True:
+        height, width = window.getmaxyx()
+        draw(window, table, state)
+        if not handle_key(window.getch(), state, height, width):
+            break
+
+
+def main() -> None:
+    """Run the table viewer from the command line."""
+
+    args = parse_args()
+    table = load_table(args.table_file)
+    curses.wrapper(run, table)
+
+
+if __name__ == "__main__":
+    main()

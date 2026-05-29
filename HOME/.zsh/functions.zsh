@@ -6,6 +6,9 @@ command_exists() {
     type "$command" >/dev/null 2>&1
 }
 
+# Use Brave for mermaid-cli Puppeteer rendering.
+alias mmdc='PUPPETEER_EXECUTABLE_PATH="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" command mmdc'
+
 
 ######################################################################
 # aliasas                                                            #
@@ -380,4 +383,3 @@ _review_preview() {
     --minus-emph-style='syntax bold "#4a1f2b"' \
     --keep-plus-minus-markers
 }
-
